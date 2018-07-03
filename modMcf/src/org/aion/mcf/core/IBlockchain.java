@@ -60,6 +60,8 @@ public interface IBlockchain<
 
     void storeBlock(BLK block, List<TR> receipts);
 
+    void storePendingBlock(BLK block);
+
     void setBestBlock(BLK block);
 
     boolean hasParentOnTheChain(BLK block);

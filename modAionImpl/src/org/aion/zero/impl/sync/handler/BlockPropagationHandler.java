@@ -167,6 +167,7 @@ public class BlockPropagationHandler {
                      block.getNumber(),
                      block.getTransactionsList().size(),
                      result);
+            blockchain.storePendingBlock(block);
         } else {
             result = this.blockchain.tryToConnect(block);
             long t2 = System.currentTimeMillis();

@@ -68,6 +68,7 @@ public abstract class AbstractRepository<
 
     protected static final String INDEX_DB = CfgDb.Names.INDEX;
     protected static final String BLOCK_DB = CfgDb.Names.BLOCK;
+    protected static final String PENDING_BLOCK_DB = CfgDb.Names.PENDING_BLOCK;
     protected static final String DETAILS_DB = CfgDb.Names.DETAILS;
     protected static final String STORAGE_DB = CfgDb.Names.STORAGE;
     protected static final String STATE_DB = CfgDb.Names.STATE;
@@ -89,6 +90,7 @@ public abstract class AbstractRepository<
     protected IByteArrayKeyValueDatabase storageDatabase;
     protected IByteArrayKeyValueDatabase indexDatabase;
     protected IByteArrayKeyValueDatabase blockDatabase;
+    protected IByteArrayKeyValueDatabase pendingBlockDatabase;
     protected IByteArrayKeyValueDatabase stateDatabase;
     protected IByteArrayKeyValueDatabase stateArchiveDatabase;
     protected IByteArrayKeyValueDatabase txPoolDatabase;
@@ -233,6 +235,11 @@ public abstract class AbstractRepository<
             sharedProps.setProperty(Props.DB_NAME, BLOCK_DB);
             this.blockDatabase = connectAndOpen(sharedProps);
             databaseGroup.add(blockDatabase);
+
+            // using block specific properties
+            sharedProps.setProperty(Props.DB_NAME, PENDING_BLOCK_DB);
+            this.pendingBlockDatabase = connectAndOpen(sharedProps);
+            databaseGroup.add(pendingBlockDatabase);
 
             // getting pending tx pool specific properties
             sharedProps = cfg.getDatabaseConfig(PENDING_TX_POOL_DB);
