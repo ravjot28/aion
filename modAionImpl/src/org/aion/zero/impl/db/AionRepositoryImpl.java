@@ -111,7 +111,7 @@ public class AionRepositoryImpl
             // Setup block store.
             this.blockStore = new AionBlockStore(indexDatabase, blockDatabase, checkIntegrity);
 
-            this.pendingStore = new PendingBlockStore(pendingBlockDatabase);
+            this.pendingStore = new PendingBlockStore(pendingStoreProperties);
 
             // Setup world trie.
             worldState = createStateTrie();
