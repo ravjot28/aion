@@ -26,10 +26,7 @@ import static org.aion.mcf.db.DatabaseUtils.connectAndOpen;
 
 import java.io.Closeable;
 import java.io.File;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Optional;
-import java.util.Properties;
+import java.util.*;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.aion.base.db.Flushable;
@@ -149,6 +146,34 @@ public class PendingBlockStore implements Flushable, Closeable {
 
         props.setProperty(Props.DB_NAME, INDEX_DB_NAME);
         indexSource = connectAndOpen(props, LOG);
+    }
+
+    public List<AionBlock> loadBlockRange(long first, long last) {
+        // get all the queues for the given levels
+        HashList current, queueHashes = new HashList();
+        for (long i = first; i <= last; i++) {
+            current = levelSource.get(ByteUtil.longToBytes(i));
+            if (current != null) {
+                queueHashes.addAll(current);
+            }
+        }
+
+        // get all the blocks in the given queues
+        HashList blockHashes = new HashList();
+        for (byte[] queue : queueHashes) {
+            current = queueSource.get(queue);
+            if (current != null) {
+                blockHashes.addAll(current);
+            }
+        }
+
+        // load blocks
+        List<AionBlock> blocks = new ArrayList<>();
+        for (byte[] hash : blockHashes) {
+            blocks.add(blockSource.get(hash));
+        }
+
+        return blocks;
     }
 
     public static class HashList extends ArrayList<byte[]> {
@@ -336,7 +361,7 @@ public class PendingBlockStore implements Flushable, Closeable {
             // process rest of block range
             for (AionBlock current : blockRange) {
                 // check correct input
-                if (!current.getParentHash().equals(parent.getHash())) {
+                if (!Arrays.equals(current.getParentHash(), parent.getHash())) {
                     // TODO discard batch
                     throw new IllegalArgumentException(
                             "PendingBlockStore#addBlockRange called with non-sequential blocks.");

@@ -36,7 +36,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import org.aion.base.util.ByteArrayWrapper;
 import org.aion.mcf.core.ImportResult;
-import org.aion.p2p.IP2pMgr;
 import org.aion.zero.impl.AionBlockchainImpl;
 import org.aion.zero.impl.types.AionBlock;
 import org.slf4j.Logger;
@@ -94,9 +93,9 @@ final class TaskImportBlocks implements Runnable {
             }
 
             List<AionBlock> batch = bw.getBlocks().stream()
-                    .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
-                    .filter(b -> !chain.isPruneRestricted(b.getNumber()))
-                    .collect(Collectors.toList());
+                .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
+                .filter(b -> !chain.isPruneRestricted(b.getNumber()))
+                .collect(Collectors.toList());
 
             PeerState state = peerStates.get(bw.getNodeIdHash());
             if (state == null) {
@@ -115,7 +114,8 @@ final class TaskImportBlocks implements Runnable {
                     importResult = importBlock(b, bw.getDisplayId(), state);
                 } catch (Throwable e) {
                     log.error("<import-block throw> {}", e.toString());
-                    if (e.getMessage() != null && e.getMessage().contains("No space left on device")) {
+                    if (e.getMessage() != null
+                            && e.getMessage().contains("No space left on device")) {
                         log.error("Shutdown due to lack of disk space.");
                         System.exit(0);
                     }
@@ -143,12 +143,17 @@ final class TaskImportBlocks implements Runnable {
                 }
             }
 
+            // remembering imported range
+            long first = -1L, last = -1L;
+
             for (AionBlock b : batch) {
+                last = b.getNumber();
                 try {
                     importResult = importBlock(b, bw.getDisplayId(), state);
                 } catch (Throwable e) {
                     log.error("<import-block throw> {}", e.toString());
-                    if (e.getMessage() != null && e.getMessage().contains("No space left on device")) {
+                    if (e.getMessage() != null
+                            && e.getMessage().contains("No space left on device")) {
                         log.error("Shutdown due to lack of disk space.");
                         System.exit(0);
                     }
@@ -167,7 +172,7 @@ final class TaskImportBlocks implements Runnable {
 
                 // decide whether to change mode based on the first
                 if (b == batch.get(0) && state != null) {
-
+                    first = b.getNumber();
                     PeerState.Mode mode = state.getMode();
 
                     switch (importResult) {
@@ -203,6 +208,13 @@ final class TaskImportBlocks implements Runnable {
                 // if any block results in NO_PARENT, all subsequent blocks will too
                 if (importResult == ImportResult.NO_PARENT) {
                     log.debug("Stopped importing batch due to NO_PARENT result.");
+                    // store batch for later use
+                    log.debug(
+                            "Stored batch of {} blocks starting from hash = {}, number = {}.",
+                            batch.size(),
+                            b.getShortHash(),
+                            b.getNumber());
+                    chain.storePendingBlockRange(batch);
                     break;
                 }
             }
@@ -217,6 +229,46 @@ final class TaskImportBlocks implements Runnable {
 
             if (state != null) {
                 state.resetLastHeaderRequest(); // so we can continue immediately
+            }
+
+            // check for stored blocks
+            if (state.getMode() != PeerState.Mode.BACKWARD && first > 0 && last > 0) {
+                List<AionBlock> batchFromDisk = chain.loadPendingBlockRange(first, last + 1);
+                log.debug("Loaded {} blocks from disk before filtering from levels {} to {}.", batchFromDisk.size(), first, (last + 1));
+
+                batchFromDisk = batchFromDisk.stream()
+                        .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
+                        .collect(Collectors.toList());
+
+                if (batchFromDisk.size() > 0) {
+                    log.debug("Importing {} blocks from pending storage.", batchFromDisk.size());
+                } else {
+                    log.debug("No blocks left after filtering imported.");
+                }
+
+                for (AionBlock b : batchFromDisk) {
+                    try {
+                        importResult = importBlock(b, bw.getDisplayId(), state);
+                    } catch (Throwable e) {
+                        log.error("<import-block throw> {}", e.toString());
+                        if (e.getMessage() != null
+                                && e.getMessage().contains("No space left on device")) {
+                            log.error("Shutdown due to lack of disk space.");
+                            System.exit(0);
+                        }
+                        continue;
+                    }
+
+                    switch (importResult) {
+                        case IMPORTED_BEST:
+                        case IMPORTED_NOT_BEST:
+                        case EXIST:
+                            importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
+                            break;
+                        default:
+                            break;
+                    }
+                }
             }
 
             this.statis.update(this.chain.getBestBlock().getNumber());
@@ -240,7 +292,8 @@ final class TaskImportBlocks implements Runnable {
         return importResult;
     }
 
-    private void forwardModeUpdate(PeerState state, long lastBlock, ImportResult importResult, long blockNumber) {
+    private void forwardModeUpdate(
+            PeerState state, long lastBlock, ImportResult importResult, long blockNumber) {
         // continue
         state.setBase(lastBlock);
         // if the imported best block, switch back to normal mode

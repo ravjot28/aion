@@ -62,6 +62,10 @@ public interface IBlockchain<
 
     void storePendingBlock(BLK block);
 
+    void storePendingBlockRange(List<BLK> blocks);
+
+    List<BLK> loadPendingBlockRange(long first, long last);
+
     void setBestBlock(BLK block);
 
     boolean hasParentOnTheChain(BLK block);
