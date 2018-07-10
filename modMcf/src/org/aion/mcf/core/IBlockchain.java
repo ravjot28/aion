@@ -60,9 +60,9 @@ public interface IBlockchain<
 
     void storeBlock(BLK block, List<TR> receipts);
 
-    void storePendingBlock(BLK block);
+    boolean storePendingBlock(BLK block);
 
-    void storePendingBlockRange(List<BLK> blocks);
+    int storePendingBlockRange(List<BLK> blocks);
 
     List<BLK> loadPendingBlockRange(long first, long last);
 

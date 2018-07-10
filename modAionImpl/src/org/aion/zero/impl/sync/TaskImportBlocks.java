@@ -147,7 +147,6 @@ final class TaskImportBlocks implements Runnable {
             long first = -1L, last = -1L;
 
             for (AionBlock b : batch) {
-                last = b.getNumber();
                 try {
                     importResult = importBlock(b, bw.getDisplayId(), state);
                 } catch (Throwable e) {
@@ -210,11 +209,12 @@ final class TaskImportBlocks implements Runnable {
                     log.debug("Stopped importing batch due to NO_PARENT result.");
                     // store batch for later use
                     log.debug(
-                            "Stored batch of {} blocks starting from hash = {}, number = {}.",
+                            "Attempting to store batch of {} blocks starting from hash = {}, number = {}.",
                             batch.size(),
                             b.getShortHash(),
                             b.getNumber());
-                    chain.storePendingBlockRange(batch);
+                    int stored = chain.storePendingBlockRange(batch);
+                    log.debug("From the batch above, {} blocks were stored.", stored);
                     break;
                 }
             }
@@ -231,10 +231,12 @@ final class TaskImportBlocks implements Runnable {
                 state.resetLastHeaderRequest(); // so we can continue immediately
             }
 
+            last = first + batch.size() + 1;
+
             // check for stored blocks
             if (state.getMode() != PeerState.Mode.BACKWARD && first > 0 && last > 0) {
-                List<AionBlock> batchFromDisk = chain.loadPendingBlockRange(first, last + 1);
-                log.debug("Loaded {} blocks from disk before filtering from levels {} to {}.", batchFromDisk.size(), first, (last + 1));
+                List<AionBlock> batchFromDisk = chain.loadPendingBlockRange(first, last);
+                log.debug("Loaded {} blocks from disk from levels {} to {} before filtering.", batchFromDisk.size(), first, last);
 
                 batchFromDisk = batchFromDisk.stream()
                         .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
@@ -248,7 +250,7 @@ final class TaskImportBlocks implements Runnable {
 
                 for (AionBlock b : batchFromDisk) {
                     try {
-                        importResult = importBlock(b, bw.getDisplayId(), state);
+                        importResult = importBlock(b, "PENDING_STORAGE", state);
                     } catch (Throwable e) {
                         log.error("<import-block throw> {}", e.toString());
                         if (e.getMessage() != null

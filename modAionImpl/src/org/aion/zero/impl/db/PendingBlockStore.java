@@ -32,12 +32,17 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.aion.base.db.Flushable;
 import org.aion.base.db.IByteArrayKeyValueDatabase;
 import org.aion.base.util.ByteUtil;
+import org.aion.db.impl.DBVendor;
+import org.aion.db.impl.DatabaseFactory;
 import org.aion.db.impl.DatabaseFactory.Props;
 import org.aion.log.AionLoggerFactory;
 import org.aion.log.LogEnum;
 import org.aion.mcf.db.exception.InvalidFilePathException;
 import org.aion.mcf.ds.ObjectDataSource;
 import org.aion.mcf.ds.Serializer;
+import org.aion.rlp.RLP;
+import org.aion.rlp.RLPElement;
+import org.aion.rlp.RLPList;
 import org.aion.zero.impl.types.AionBlock;
 import org.slf4j.Logger;
 
@@ -57,9 +62,9 @@ public class PendingBlockStore implements Flushable, Closeable {
     /** maps pending block hashes to their block data */
     private ObjectDataSource<AionBlock> blockSource;
     /** maps a level to the queue hashes with blocks starting at that level */
-    private ObjectDataSource<HashList> levelSource;
+    private ObjectDataSource<List<byte[]>> levelSource;
     /** maps a queue hash to a list of consecutive block hashes */
-    private ObjectDataSource<HashList> queueSource;
+    private ObjectDataSource<List<byte[]>> queueSource;
     /** maps a block hash to its current queue hash */
     private IByteArrayKeyValueDatabase indexSource;
 
@@ -82,15 +87,27 @@ public class PendingBlockStore implements Flushable, Closeable {
         }
         props.setProperty(Props.DB_PATH, f.getAbsolutePath());
 
-        // create the block source
+        init(props);
+    }
 
+    /** Constructor for testing. Using {@link org.aion.db.impl.DBVendor#MOCKDB}. */
+    public PendingBlockStore() {
+        Properties props = new Properties();
+        props.setProperty(DatabaseFactory.Props.DB_TYPE, DBVendor.MOCKDB.toValue());
+
+        init(props);
+    }
+
+    public void init(Properties props) {
+
+        // create the block source
         props.setProperty(Props.DB_NAME, BLOCK_DB_NAME);
         IByteArrayKeyValueDatabase database = connectAndOpen(props, LOG);
 
         this.blockSource =
                 new ObjectDataSource<>(
                         database,
-                        new Serializer<AionBlock, byte[]>() {
+                        new Serializer<>() {
                             @Override
                             public byte[] serialize(AionBlock block) {
                                 return block.getEncoded();
@@ -107,40 +124,14 @@ public class PendingBlockStore implements Flushable, Closeable {
         props.setProperty(Props.DB_NAME, LEVEL_DB_NAME);
         database = connectAndOpen(props, LOG);
 
-        this.levelSource =
-                new ObjectDataSource<>(
-                        database,
-                        new Serializer<HashList, byte[]>() {
-                            @Override
-                            public byte[] serialize(HashList hashes) {
-                                return hashes.getEncoded();
-                            }
-
-                            @Override
-                            public HashList deserialize(byte[] bytes) {
-                                return new HashList(bytes);
-                            }
-                        });
+        this.levelSource = new ObjectDataSource<>(database, HASH_LIST_RLP_SERIALIZER);
 
         // create the queue source
 
         props.setProperty(Props.DB_NAME, QUEUE_DB_NAME);
         database = connectAndOpen(props, LOG);
 
-        this.queueSource =
-                new ObjectDataSource<>(
-                        database,
-                        new Serializer<HashList, byte[]>() {
-                            @Override
-                            public byte[] serialize(HashList hashes) {
-                                return hashes.getEncoded();
-                            }
-
-                            @Override
-                            public HashList deserialize(byte[] bytes) {
-                                return new HashList(bytes);
-                            }
-                        });
+        this.queueSource = new ObjectDataSource<>(database, HASH_LIST_RLP_SERIALIZER);
 
         // create the index source
 
@@ -150,7 +141,7 @@ public class PendingBlockStore implements Flushable, Closeable {
 
     public List<AionBlock> loadBlockRange(long first, long last) {
         // get all the queues for the given levels
-        HashList current, queueHashes = new HashList();
+        List<byte[]> current, queueHashes = new ArrayList<>();
         for (long i = first; i <= last; i++) {
             current = levelSource.get(ByteUtil.longToBytes(i));
             if (current != null) {
@@ -159,7 +150,7 @@ public class PendingBlockStore implements Flushable, Closeable {
         }
 
         // get all the blocks in the given queues
-        HashList blockHashes = new HashList();
+        List<byte[]> blockHashes = new ArrayList<>();
         for (byte[] queue : queueHashes) {
             current = queueSource.get(queue);
             if (current != null) {
@@ -176,28 +167,30 @@ public class PendingBlockStore implements Flushable, Closeable {
         return blocks;
     }
 
-    public static class HashList extends ArrayList<byte[]> {
+    public static final Serializer<List<byte[]>, byte[]> HASH_LIST_RLP_SERIALIZER =
+            new Serializer<>() {
+                @Override
+                public byte[] serialize(List<byte[]> object) {
+                    byte[][] infoList = new byte[object.size()][];
+                    int i = 0;
+                    for (byte[] b : object) {
+                        infoList[i] = RLP.encodeElement(b);
+                        i++;
+                    }
+                    return RLP.encodeList(infoList);
+                }
 
-        public HashList() {}
+                @Override
+                public List<byte[]> deserialize(byte[] stream) {
+                    RLPList list = (RLPList) RLP.decode2(stream).get(0);
+                    List<byte[]> res = new ArrayList<>(list.size());
 
-        public HashList(byte[] encoding) {
-            String[] values = new String(encoding).split(",");
-            for (String val : values) {
-                this.add(val.getBytes());
-            }
-        }
-
-        public byte[] getEncoded() {
-            // TODO needs optimization
-            StringBuffer sb = new StringBuffer();
-            this.forEach(
-                    v -> {
-                        sb.append(new String(v));
-                        sb.append(",");
-                    });
-            return sb.toString().getBytes();
-        }
-    }
+                    for (RLPElement aList : list) {
+                        res.add(aList.getRLPData());
+                    }
+                    return res;
+                }
+            };
 
     @Override
     public void flush() {
@@ -224,61 +217,71 @@ public class PendingBlockStore implements Flushable, Closeable {
      *   <li>if new queue, add it to the <b>level</b> database
      * </ol>
      */
-    public void addBlock(AionBlock block) {
+    public boolean addBlock(AionBlock block) {
         // nothing to do with null parameter
         if (block == null) {
-            return;
+            return false;
         }
 
         lock.writeLock().lock();
 
         try {
-            // store block data
-            blockSource.put(block.getHash(), block);
+            // skip if already stored
+            if (!indexSource.get(block.getHash()).isPresent()) {
 
-            // find parent queue hash
-            Optional<byte[]> existingQueueHash = indexSource.get(block.getParentHash());
-            byte[] currentQueueHash = null;
-            HashList currentQueue = null;
+                // store block data
+                blockSource.put(block.getHash(), block);
 
-            // get existing queue if present
-            if (existingQueueHash.isPresent()) {
-                // using parent queue hash
-                currentQueueHash = existingQueueHash.get();
+                // find parent queue hash
+                Optional<byte[]> existingQueueHash = indexSource.get(block.getParentHash());
+                byte[] currentQueueHash = null;
+                List<byte[]> currentQueue = null;
 
-                // append block to queue
-                currentQueue = queueSource.get(currentQueueHash);
-            } // do not add else here!
+                // get existing queue if present
+                if (existingQueueHash.isPresent()) {
+                    // using parent queue hash
+                    currentQueueHash = existingQueueHash.get();
 
-            // when no queue exists OR problem with existing queue
-            if (currentQueue == null || currentQueue.size() == 0) {
-                // start new queue
+                    // append block to queue
+                    currentQueue = queueSource.get(currentQueueHash);
+                } // do not add else here!
 
-                // queue hash = the node hash
-                currentQueueHash = block.getHash();
-                currentQueue = new HashList();
+                // when no queue exists OR problem with existing queue
+                if (currentQueue == null || currentQueue.size() == 0) {
+                    // start new queue
 
-                // add (to) level
-                byte[] levelKey = ByteUtil.longToBytes(block.getNumber());
-                HashList levelData = levelSource.get(levelKey);
+                    // queue hash = the node hash
+                    currentQueueHash = block.getHash();
+                    currentQueue = new ArrayList<>();
 
-                if (levelData == null) {
-                    levelData = new HashList();
+                    // add (to) level
+                    byte[] levelKey = ByteUtil.longToBytes(block.getNumber());
+                    List<byte[]> levelData = levelSource.get(levelKey);
+
+                    if (levelData == null) {
+                        levelData = new ArrayList<>();
+                    }
+
+                    levelData.add(currentQueueHash);
+                    levelSource.put(levelKey, levelData);
                 }
 
-                levelData.add(currentQueueHash);
-                levelSource.put(levelKey, levelData);
+                // NOTE: at this point the currentQueueHash was initialized
+                // either with a previous hash OR the block hash
+
+                // index block with queue hash
+                indexSource.put(block.getHash(), currentQueueHash);
+
+                // add element to queue
+                currentQueue.add(block.getHash());
+                queueSource.put(currentQueueHash, currentQueue);
+
+                // the block was added
+                return true;
+            } else {
+                // block already stored
+                return false;
             }
-
-            // NOTE: at this point the currentQueueHash was initialized
-            // either with a previous hash OR the block hash
-
-            // index block with queue hash
-            indexSource.put(block.getHash(), currentQueueHash);
-
-            // add element to queue
-            currentQueue.add(block.getHash());
-            queueSource.put(currentQueueHash, currentQueue);
         } finally {
             lock.writeLock().unlock();
         }
@@ -297,10 +300,10 @@ public class PendingBlockStore implements Flushable, Closeable {
      * @apiNote The blocks must be ordered by block number and direct ancestry, otherwise an {@link
      *     IllegalArgumentException} will be thrown when the inconsistency is encountered.
      */
-    public void addBlockRange(List<AionBlock> blockRange) {
+    public int addBlockRange(List<AionBlock> blockRange) {
         // nothing to do when 0 blocks given
         if (blockRange == null || blockRange.size() == 0) {
-            return;
+            return 0;
         }
 
         lock.writeLock().lock();
@@ -309,13 +312,22 @@ public class PendingBlockStore implements Flushable, Closeable {
             // first block determines the batch queue placement
             AionBlock first = blockRange.remove(0);
 
+            // skip if already stored
+            while (indexSource.get(first.getHash()).isPresent()) {
+                if (blockRange.size() == 0) {
+                    return 0;
+                } else {
+                    first = blockRange.remove(0);
+                }
+            }
+
             // store block data
             blockSource.putToBatch(first.getHash(), first);
 
             // find parent queue hash
             Optional<byte[]> existingQueueHash = indexSource.get(first.getParentHash());
             byte[] currentQueueHash = null;
-            HashList currentQueue = null;
+            List<byte[]> currentQueue = null;
 
             // get existing queue if present
             if (existingQueueHash.isPresent()) {
@@ -332,14 +344,14 @@ public class PendingBlockStore implements Flushable, Closeable {
 
                 // queue hash = the first node hash
                 currentQueueHash = first.getHash();
-                currentQueue = new HashList();
+                currentQueue = new ArrayList<>();
 
                 // add (to) level
                 byte[] levelKey = ByteUtil.longToBytes(first.getNumber());
-                HashList levelData = levelSource.get(levelKey);
+                List<byte[]> levelData = levelSource.get(levelKey);
 
                 if (levelData == null) {
-                    levelData = new HashList();
+                    levelData = new ArrayList<>();
                 }
 
                 levelData.add(currentQueueHash);
@@ -385,6 +397,9 @@ public class PendingBlockStore implements Flushable, Closeable {
             indexSource.commitBatch();
             queueSource.put(currentQueueHash, currentQueue);
             levelSource.flushBatch();
+
+            // the number of blocks added
+            return blockRange.size() + 1;
         } finally {
             lock.writeLock().unlock();
         }
