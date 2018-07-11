@@ -10,7 +10,10 @@ public class PeerState {
         BACKWARD,
 
         /** The peer is in side-chain; sync forward to catch up. */
-        FORWARD
+        FORWARD,
+
+        /** The peer is in main-chain or side-chain; use out-of-order syncing strategy. */
+        TORRENT
     }
 
     // TODO: enforce rules on this

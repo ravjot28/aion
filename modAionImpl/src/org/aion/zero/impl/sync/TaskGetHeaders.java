@@ -29,6 +29,8 @@
 
 package org.aion.zero.impl.sync;
 
+import static org.aion.p2p.P2pConstant.BACKWARD_SYNC_STEP;
+
 import java.math.BigInteger;
 import java.util.Collection;
 import java.util.List;
@@ -37,10 +39,9 @@ import java.util.Random;
 import java.util.stream.Collectors;
 import org.aion.p2p.INode;
 import org.aion.p2p.IP2pMgr;
+import org.aion.zero.impl.sync.PeerState.Mode;
 import org.aion.zero.impl.sync.msg.ReqBlocksHeaders;
 import org.slf4j.Logger;
-
-import static org.aion.p2p.P2pConstant.BACKWARD_SYNC_STEP;
 
 /** @author chris */
 final class TaskGetHeaders implements Runnable {
@@ -78,14 +79,13 @@ final class TaskGetHeaders implements Runnable {
         // filter nodes by total difficulty
         long now = System.currentTimeMillis();
         List<INode> nodesFiltered = nodes.stream()
-                .filter(n ->
-                        // higher td
-                        n.getTotalDifficulty() != null && n.getTotalDifficulty().compareTo(this.selfTd) >= 0
-                                // not recently requested
-                                && (now - 5000) > peerStates
-                                .computeIfAbsent(n.getIdHash(), k -> new PeerState(PeerState.Mode.NORMAL, selfNumber))
-                                .getLastHeaderRequest())
-                .collect(Collectors.toList());
+            .filter(n ->
+                // higher td
+                n.getTotalDifficulty() != null && n.getTotalDifficulty().compareTo(this.selfTd) >= 0
+                    // not recently requested
+                    && (now - 5000) > peerStates.computeIfAbsent(n.getIdHash(),
+                    k -> new PeerState(Mode.NORMAL, selfNumber)).getLastHeaderRequest())
+            .collect(Collectors.toList());
         if (nodesFiltered.isEmpty()) {
             return;
         }
@@ -119,16 +119,17 @@ final class TaskGetHeaders implements Runnable {
                         // no need to request from this node. His TD is probably corrupted.
                         return;
                     }
-
                     break;
                 }
             case BACKWARD:
                 {
                     // step back by 24 to 128 blocks
-                    int backwardStep = size + random.nextInt(BACKWARD_SYNC_STEP - size);
+                    int backwardStep = size * (random.nextInt(BACKWARD_SYNC_STEP / size) + 1);
                     from = Math.max(1, state.getBase() - backwardStep);
                     break;
                 }
+            case TORRENT:
+                // same as FORWARD
             case FORWARD:
                 {
                     // start from base block

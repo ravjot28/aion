@@ -94,9 +94,8 @@ final class TaskImportBlocks implements Runnable {
             }
 
             List<AionBlock> batch = bw.getBlocks().stream()
-                    .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
-                    .filter(b -> !chain.isPruneRestricted(b.getNumber()))
-                    .collect(Collectors.toList());
+                .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
+                .filter(b -> !chain.isPruneRestricted(b.getNumber())).collect(Collectors.toList());
 
             PeerState state = peerStates.get(bw.getNodeIdHash());
             if (state == null) {
@@ -145,7 +144,7 @@ final class TaskImportBlocks implements Runnable {
             }
 
             // remembering imported range
-            long first = -1L, last = -1L;
+            long first = -1L, last;
 
             for (AionBlock b : batch) {
                 try {
@@ -197,9 +196,13 @@ final class TaskImportBlocks implements Runnable {
                                 // update base
                                 state.setBase(b.getNumber());
                             } else {
-                                // switch to backward mode
-                                state.setMode(Mode.BACKWARD);
-                                state.setBase(b.getNumber());
+                                if (mode == Mode.TORRENT) {
+                                    state.setBase(chain.nextBase(state.getBase()));
+                                } else {
+                                    // switch to backward mode
+                                    state.setMode(Mode.BACKWARD);
+                                    state.setBase(b.getNumber());
+                                }
                             }
                             break;
                     }
@@ -245,8 +248,8 @@ final class TaskImportBlocks implements Runnable {
                         last);
 
                 batchFromDisk = batchFromDisk.stream()
-                        .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
-                        .collect(Collectors.toList());
+                    .filter(b -> importedBlockHashes.get(ByteArrayWrapper.wrap(b.getHash())) == null)
+                    .collect(Collectors.toList());
 
                 if (batchFromDisk.size() > 0) {
                     log.debug("Importing {} blocks from pending storage.", batchFromDisk.size());
