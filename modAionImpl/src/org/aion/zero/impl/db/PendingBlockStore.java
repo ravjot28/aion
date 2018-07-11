@@ -291,9 +291,6 @@ public class PendingBlockStore implements Flushable, Closeable {
      *   <li>add block hash to its queue in the <b>queue</b> database
      *   <li>if new queue, add it to the <b>level</b> database
      * </ol>
-     *
-     * @apiNote The blocks must be ordered by block number and direct ancestry, otherwise an {@link
-     *     IllegalArgumentException} will be thrown when the inconsistency is encountered.
      */
     public int addBlockRange(List<AionBlock> blockRange) {
         // nothing to do when 0 blocks given
@@ -307,90 +304,109 @@ public class PendingBlockStore implements Flushable, Closeable {
             // first block determines the batch queue placement
             AionBlock first = blockRange.remove(0);
 
-            // skip if already stored
-            while (indexSource.get(first.getHash()).isPresent()) {
-                if (blockRange.size() == 0) {
-                    return 0;
-                } else {
-                    first = blockRange.remove(0);
-                }
-            }
-
-            // find parent queue hash
-            Optional<byte[]> existingQueueHash = indexSource.get(first.getParentHash());
-            byte[] currentQueueHash = null;
-            List<AionBlock> currentQueue = null;
-
-            // get existing queue if present
-            if (existingQueueHash.isPresent()) {
-                // using parent queue hash
-                currentQueueHash = existingQueueHash.get();
-
-                // append block to queue
-                currentQueue = queueSource.get(currentQueueHash);
-            } // do not add else here!
-
-            // when no queue exists OR problem with existing queue
-            if (currentQueue == null || currentQueue.size() == 0) {
-                // start new queue
-
-                // queue hash = the first node hash
-                currentQueueHash = first.getHash();
-                currentQueue = new ArrayList<>();
-
-                // add (to) level
-                byte[] levelKey = ByteUtil.longToBytes(first.getNumber());
-                List<byte[]> levelData = levelSource.get(levelKey);
-
-                if (levelData == null) {
-                    levelData = new ArrayList<>();
-                }
-
-                levelData.add(currentQueueHash);
-                levelSource.putToBatch(levelKey, levelData);
-            }
-
-            // NOTE: at this point the currentQueueHash was initialized
-            // either with a previous hash or the first block hash
-
-            // index block with queue hash
-            indexSource.putToBatch(first.getHash(), currentQueueHash);
-
-            // add element to queue
-            currentQueue.add(first);
-
-            // keep track of parent to ensure correct range
-            AionBlock parent = first;
-
-            // process rest of block range
-            for (AionBlock current : blockRange) {
-                // check correct input
-                if (!Arrays.equals(current.getParentHash(), parent.getHash())) {
-                    // TODO discard batch
-                    throw new IllegalArgumentException(
-                            "PendingBlockStore#addBlockRange called with non-sequential blocks.");
-                }
-
-                // index block to current queue
-                indexSource.put(current.getHash(), currentQueueHash);
-
-                // append block to queue
-                currentQueue.add(current);
-
-                // update parent
-                parent = current;
-            }
+            int stored = addBlockRange(first, blockRange);
 
             // save data to disk
             indexSource.commitBatch();
-            queueSource.put(currentQueueHash, currentQueue);
             levelSource.flushBatch();
+            queueSource.flushBatch();
 
             // the number of blocks added
-            return blockRange.size() + 1;
+            return stored;
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    private int addBlockRange(AionBlock first, List<AionBlock> blockRange) {
+
+        // skip if already stored
+        while (indexSource.get(first.getHash()).isPresent()) {
+            if (blockRange.size() == 0) {
+                return 0;
+            } else {
+                first = blockRange.remove(0);
+            }
+        }
+
+        // find parent queue hash
+        Optional<byte[]> existingQueueHash = indexSource.get(first.getParentHash());
+        byte[] currentQueueHash = null;
+        List<AionBlock> currentQueue = null;
+
+        // get existing queue if present
+        if (existingQueueHash.isPresent()) {
+            // using parent queue hash
+            currentQueueHash = existingQueueHash.get();
+
+            // append block to queue
+            currentQueue = queueSource.get(currentQueueHash);
+        } // do not add else here!
+
+        // when no queue exists OR problem with existing queue
+        if (currentQueue == null || currentQueue.size() == 0) {
+            // start new queue
+
+            // queue hash = the first node hash
+            currentQueueHash = first.getHash();
+            currentQueue = new ArrayList<>();
+
+            // add (to) level
+            byte[] levelKey = ByteUtil.longToBytes(first.getNumber());
+            List<byte[]> levelData = levelSource.get(levelKey);
+
+            if (levelData == null) {
+                levelData = new ArrayList<>();
+            }
+
+            levelData.add(currentQueueHash);
+            levelSource.putToBatch(levelKey, levelData);
+        }
+
+        // NOTE: at this point the currentQueueHash was initialized
+        // either with a previous hash or the first block hash
+
+        // index block with queue hash
+        indexSource.putToBatch(first.getHash(), currentQueueHash);
+        int stored = 1;
+
+        // add element to queue
+        currentQueue.add(first);
+
+        // keep track of parent to ensure correct range
+        AionBlock parent = first;
+
+        AionBlock current;
+        // process rest of block range
+        while (blockRange.size() > 0) {
+            current = blockRange.remove(0);
+
+            // check for issues with batch continuity and storage
+            if (!Arrays.equals(current.getParentHash(), parent.getHash()) // continuity issue
+                    || indexSource.get(current.getHash()).isPresent()) { // already stored
+
+                // store separately
+                stored += addBlockRange(current, blockRange);
+
+                // done with loop
+                break;
+            }
+
+            // index block to current queue
+            indexSource.putToBatch(current.getHash(), currentQueueHash);
+
+            // append block to queue
+            currentQueue.add(current);
+
+            // update parent
+            parent = current;
+        }
+
+        // done with queue
+        queueSource.putToBatch(currentQueueHash, currentQueue);
+
+        // the number of blocks added
+        return stored;
     }
 
     @Override
