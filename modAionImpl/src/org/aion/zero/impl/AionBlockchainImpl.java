@@ -1191,6 +1191,11 @@ public class AionBlockchainImpl implements IAionBlockchain {
         return repository.getPendingBlockStore().loadBlockRange(first, last);
     }
 
+    @Override
+    public long nextBase(long current) {
+        return repository.getPendingBlockStore().nextBase(current);
+    }
+
     public boolean hasParentOnTheChain(AionBlock block) {
         return getParent(block.getHeader()) != null;
     }

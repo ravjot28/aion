@@ -29,8 +29,10 @@ import java.io.File;
 import java.util.*;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 import org.aion.base.db.Flushable;
 import org.aion.base.db.IByteArrayKeyValueDatabase;
+import org.aion.base.util.ByteArrayWrapper;
 import org.aion.base.util.ByteUtil;
 import org.aion.db.impl.DBVendor;
 import org.aion.db.impl.DatabaseFactory;
@@ -65,6 +67,9 @@ public class PendingBlockStore implements Flushable, Closeable {
     /** maps a block hash to its current queue hash */
     private IByteArrayKeyValueDatabase indexSource;
 
+    // tracking the status
+    private Map<ByteArrayWrapper, QueueInfo> status;
+
     public PendingBlockStore(Properties props) throws InvalidFilePathException {
 
         File f = new File(props.getProperty(Props.DB_PATH), props.getProperty(Props.DB_NAME));
@@ -96,6 +101,8 @@ public class PendingBlockStore implements Flushable, Closeable {
     }
 
     public void init(Properties props) {
+        // initialize status
+        status = new HashMap<>();
 
         IByteArrayKeyValueDatabase database;
 
@@ -191,14 +198,48 @@ public class PendingBlockStore implements Flushable, Closeable {
         return blocks;
     }
 
-    @Override
-    public void flush() {
+    public long nextBase(long current) {
+
         lock.writeLock().lock();
+
         try {
-            levelSource.flush();
-            queueSource.flush();
-            if (!this.indexSource.isAutoCommitEnabled()) {
-                this.indexSource.commit();
+            // try request based on known queues
+            List<QueueInfo> known =
+                    status.values()
+                            .stream()
+                            .filter(b -> !b.isStatus()) // not coming from status
+                            .filter(b -> !b.isRequested()) // no requests made yet
+                            .filter(b -> b.getLast() > current) // last element > base
+                            .collect(Collectors.toList());
+
+            if (known.size() > 0) {
+                QueueInfo info = known.get(new Random().nextInt(known.size()));
+                // TODO: check if put is necessary
+                info.setRequested(true);
+                return info.getLast();
+            } else {
+                // try request based on status
+                known =
+                        status.values()
+                                .stream()
+                                .filter(b -> b.isStatus()) // from status
+                                .filter(b -> b.getFirst() > current) // first element > current
+                                .collect(Collectors.toList());
+
+                if (known.size() > 0) {
+                    long min = Long.MAX_VALUE;
+                    for (QueueInfo i : known) {
+                        if (min < i.getFirst()) {
+                            min = i.getFirst();
+                        }
+                    }
+                    min = min - current;
+
+                    // go at 2/3 distance to status
+                    return current + (2 * min / 3);
+                } else {
+                    return current;
+                }
             }
         } finally {
             lock.writeLock().unlock();
@@ -216,6 +257,7 @@ public class PendingBlockStore implements Flushable, Closeable {
      * </ol>
      */
     public boolean addBlock(AionBlock block) {
+
         // nothing to do with null parameter
         if (block == null) {
             return false;
@@ -270,6 +312,25 @@ public class PendingBlockStore implements Flushable, Closeable {
                 // add element to queue
                 currentQueue.add(block);
                 queueSource.put(currentQueueHash, currentQueue);
+
+                // update status
+                ByteArrayWrapper hash = ByteArrayWrapper.wrap(currentQueueHash);
+                QueueInfo info = status.get(hash);
+                if (info == null) {
+                    if (Arrays.equals(currentQueueHash, block.getHash())) {
+                        info =
+                                new QueueInfo(
+                                        currentQueueHash, block.getNumber(), block.getNumber());
+                    } else {
+                        info = new QueueInfo(currentQueueHash, block.getNumber());
+                    }
+                } else {
+                    info.setLast(block.getNumber());
+                }
+                // these blocks are added by get status
+                // the code should not attempt expanding them
+                info.setStatus(true);
+                status.put(hash, info);
 
                 // the block was added
                 return true;
@@ -405,8 +466,39 @@ public class PendingBlockStore implements Flushable, Closeable {
         // done with queue
         queueSource.putToBatch(currentQueueHash, currentQueue);
 
+        // update status
+        ByteArrayWrapper hash = ByteArrayWrapper.wrap(currentQueueHash);
+        QueueInfo info = status.get(hash);
+        if (info == null) {
+            if (Arrays.equals(currentQueueHash, first.getHash())) {
+                info = new QueueInfo(currentQueueHash, first.getNumber(), parent.getNumber());
+            } else {
+                info = new QueueInfo(currentQueueHash, parent.getNumber());
+            }
+        } else {
+            info.setLast(parent.getNumber());
+        }
+        // just received batch for this queue
+        // so requested status set to false
+        info.setRequested(false);
+        status.put(hash, info);
+
         // the number of blocks added
         return stored;
+    }
+
+    @Override
+    public void flush() {
+        lock.writeLock().lock();
+        try {
+            levelSource.flush();
+            queueSource.flush();
+            if (!this.indexSource.isAutoCommitEnabled()) {
+                this.indexSource.commit();
+            }
+        } finally {
+            lock.writeLock().unlock();
+        }
     }
 
     @Override
@@ -431,6 +523,87 @@ public class PendingBlockStore implements Flushable, Closeable {
                     lock.writeLock().unlock();
                 }
             }
+        }
+    }
+
+    public static class QueueInfo {
+
+        private static final long UNKNOWN = -1;
+
+        public QueueInfo(byte[] _hash, long _last) {
+            this.hash = _hash;
+            this.first = UNKNOWN;
+            this.last = _last;
+        }
+
+        public QueueInfo(byte[] _hash, long _first, long _last) {
+            this.hash = _hash;
+            this.first = _first;
+            this.last = _last;
+        }
+
+        public QueueInfo(byte[] data) {
+            RLPList outerList = RLP.decode2(data);
+
+            if (outerList.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "The given data does not correspond to a QueueInfo object.");
+            }
+
+            RLPList list = (RLPList) outerList.get(0);
+            this.hash = list.get(0).getRLPData();
+            this.first = ByteUtil.byteArrayToLong(list.get(1).getRLPData());
+            this.last = ByteUtil.byteArrayToLong(list.get(2).getRLPData());
+        }
+
+        // the hash identifying the queue
+        private byte[] hash;
+        // the number of the first block in the queue
+        private long first;
+        // the number of the last block in the queue
+        private long last;
+        // has there been a request for expanding this
+        private boolean requested = false;
+        // block stored from status update
+        private boolean status = false;
+
+        public byte[] getHash() {
+            return hash;
+        }
+
+        public long getFirst() {
+            return first;
+        }
+
+        public long getLast() {
+            return last;
+        }
+
+        public void setLast(long last) {
+            this.last = last;
+        }
+
+        public boolean isRequested() {
+            return requested;
+        }
+
+        public void setRequested(boolean requested) {
+            this.requested = requested;
+        }
+
+        public boolean isStatus() {
+            return status;
+        }
+
+        public void setStatus(boolean status) {
+            this.status = status;
+        }
+
+        public byte[] getEncoded() {
+            byte[] hashElement = RLP.encodeElement(hash);
+            byte[] firstElement = RLP.encodeElement(ByteUtil.longToBytes(first));
+            byte[] lastElement = RLP.encodeElement(ByteUtil.longToBytes(last));
+            return RLP.encodeList(hashElement, firstElement, lastElement);
         }
     }
 }
