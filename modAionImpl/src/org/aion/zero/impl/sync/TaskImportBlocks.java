@@ -163,33 +163,34 @@ final class TaskImportBlocks implements Runnable {
                     continue;
                 }
 
-                switch (importResult) {
-                    case IMPORTED_BEST:
-                    case IMPORTED_NOT_BEST:
-                    case EXIST:
-                        {
-                            importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
+                if (importResult.isStored()) {
+                    importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
 
-                            long lastBlock = batch.get(batch.size() - 1).getNumber();
+                    forwardModeUpdate(state, b.getNumber(), importResult, b.getNumber());
 
-                            forwardModeUpdate(state, lastBlock, importResult, b.getNumber());
-
-                            // since last import worked skipping the batch
-                            batch.clear();
-                            log.info("Forward skip.");
-                            break;
-                        }
-                    default:
-                        break;
+                    // since last import worked skipping the batch
+                    batch.clear();
+                    if (log.isDebugEnabled()){
+                        log.debug("Forward skip.");
+                    }
+                    break;
                 }
             }
 
             // remembering imported range
-            long first = -1L, last;
+            long first = -1L, last = -1L;
 
             for (AionBlock b : batch) {
                 try {
                     importResult = importBlock(b, bw.getDisplayId(), state);
+
+                    if (importResult.isStored()) {
+                        importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
+
+                        if (last <= b.getNumber()) {
+                            last = b.getNumber() + 1;
+                        }
+                    }
                 } catch (Throwable e) {
                     log.error("<import-block throw> {}", e.toString());
                     if (e.getMessage() != null
@@ -198,16 +199,6 @@ final class TaskImportBlocks implements Runnable {
                         System.exit(0);
                     }
                     continue;
-                }
-
-                switch (importResult) {
-                    case IMPORTED_BEST:
-                    case IMPORTED_NOT_BEST:
-                    case EXIST:
-                        importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
-                        break;
-                    default:
-                        break;
                 }
 
                 // decide whether to change mode based on the first
@@ -259,7 +250,10 @@ final class TaskImportBlocks implements Runnable {
                             b.getShortHash(),
                             b.getNumber());
                     int stored = chain.storePendingBlockRange(batch);
-                    log.debug("From the batch above, {} blocks were stored.", stored);
+                    log.debug(
+                            "From the batch above, {} {} stored.",
+                            stored,
+                            (stored == 1 ? "block was" : "blocks were"));
                     break;
                 }
             }
@@ -272,10 +266,8 @@ final class TaskImportBlocks implements Runnable {
 
             state.resetLastHeaderRequest(); // so we can continue immediately
 
-            last = first + batch.size() + 1;
-
             // check for stored blocks
-            if (state.getMode() != Mode.BACKWARD && first > 0 && last > 0) {
+            if (first < last) {
                 int imported = importFromStorage(state, first, last);
                 if (imported > 0) {
                     long best = chain.getBestBlock().getNumber();
@@ -309,7 +301,7 @@ final class TaskImportBlocks implements Runnable {
         // continue
         state.setBase(lastBlock);
         // if the imported best block, switch back to normal mode
-        if (importResult == ImportResult.IMPORTED_BEST) {
+        if (importResult.isBest()) {
             state.setMode(Mode.NORMAL);
             // switch peers to NORMAL otherwise they may never switch back
             for (PeerState peerState : peerStates.values()) {
