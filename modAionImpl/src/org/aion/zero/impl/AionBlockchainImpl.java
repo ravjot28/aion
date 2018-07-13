@@ -1196,7 +1196,7 @@ public class AionBlockchainImpl implements IAionBlockchain {
     }
 
     @Override
-    public List<AionBlock> loadPendingBlocksAtLevel(long level){
+    public Map<ByteArrayWrapper, List<AionBlock>> loadPendingBlocksAtLevel(long level) {
         return repository.getPendingBlockStore().loadBlockRange(level);
     }
 

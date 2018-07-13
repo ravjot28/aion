@@ -29,6 +29,7 @@
 
 package org.aion.zero.impl.sync;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -170,7 +171,7 @@ final class TaskImportBlocks implements Runnable {
 
                     // since last import worked skipping the batch
                     batch.clear();
-                    if (log.isDebugEnabled()){
+                    if (log.isDebugEnabled()) {
                         log.debug("Forward skip.");
                     }
                     break;
@@ -334,83 +335,95 @@ final class TaskImportBlocks implements Runnable {
 
         while (level <= last) {
             // get blocks stored for level
-            List<AionBlock> batchFromDisk = chain.loadPendingBlocksAtLevel(level);
+            Map<ByteArrayWrapper, List<AionBlock>> levelFromDisk = chain.loadPendingBlocksAtLevel(level);
 
-            if (batchFromDisk.isEmpty()) {
+            if (levelFromDisk.isEmpty()) {
                 // move on to next level
                 level++;
                 continue;
             }
 
-            // initialize batch counter
-            batch = 0;
+            List<ByteArrayWrapper> importedQueues = new ArrayList<>(levelFromDisk.keySet());
 
-            if (log.isDebugEnabled()) {
-                log.debug(
-                        "Loaded {} blocks from disk from level {} before filtering.",
-                        batchFromDisk.size(),
-                        level);
-            }
+            for (Map.Entry<ByteArrayWrapper, List<AionBlock>> entry : levelFromDisk.entrySet()) {
+                // initialize batch counter
+                batch = 0;
 
-            // filter already imported blocks
-            batchFromDisk =
-                    batchFromDisk
-                            .stream()
-                            .filter(b -> isNotImported(b))
-                            .collect(Collectors.toList());
+                List<AionBlock> batchFromDisk = entry.getValue();
 
-            // increment level
-            level++;
-
-            if (batchFromDisk.size() > 0) {
                 if (log.isDebugEnabled()) {
                     log.debug(
-                            "{} {} left after filtering out imported blocks.",
+                            "Loaded {} blocks from disk from level {} queue {} before filtering.",
                             batchFromDisk.size(),
-                            (batchFromDisk.size() == 1 ? "block" : "blocks"));
+                            entry.getKey(),
+                            level);
                 }
-            } else {
-                if (log.isDebugEnabled()) {
-                    log.debug("No blocks left after filtering out imported blocks.");
-                }
-                // TODO: delete level from storage
-                // move on to next level
-                continue;
-            }
 
-            for (AionBlock b : batchFromDisk) {
-                try {
-                    importResult = importBlock(b, "PENDING_BLOCKS_STORAGE", state);
+                // filter already imported blocks
+                batchFromDisk =
+                        batchFromDisk
+                                .stream()
+                                .filter(b -> isNotImported(b))
+                                .collect(Collectors.toList());
 
-                    if (importResult.isStored()) {
-                        importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
+                // increment level
+                level++;
 
-                        batch++;
-
-                        if (last <= b.getNumber()) {
-                            // can try importing more
-                            last = b.getNumber() + 1;
-                        }
+                if (batchFromDisk.size() > 0) {
+                    if (log.isDebugEnabled()) {
+                        log.debug(
+                                "{} {} left after filtering out imported blocks.",
+                                batchFromDisk.size(),
+                                (batchFromDisk.size() == 1 ? "block" : "blocks"));
                     }
-                    // TODO: stop importing if failed, but allow for sidechains
-                } catch (Throwable e) {
-                    log.error("<import-block throw> {}", e.toString());
-                    if (e.getMessage() != null
-                            && e.getMessage().contains("No space left on device")) {
-                        log.error("Shutdown due to lack of disk space.");
-                        System.exit(0);
+                } else {
+                    if (log.isDebugEnabled()) {
+                        log.debug("No blocks left after filtering out imported blocks.");
                     }
+                    // move on to next level
+                    // this queue will be deleted from storage
                     continue;
                 }
+
+                for (AionBlock b : batchFromDisk) {
+                    try {
+                        importResult = importBlock(b, "PENDING_BLOCKS_STORAGE", state);
+
+                        if (importResult.isStored()) {
+                            importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
+
+                            batch++;
+
+                            if (last <= b.getNumber()) {
+                                // can try importing more
+                                last = b.getNumber() + 1;
+                            }
+                        } else {
+                            // do not delete queue from storage
+                            importedQueues.remove(entry.getKey());
+                            // stop importing this queue
+                            break;
+                        }
+                    } catch (Throwable e) {
+                        log.error("<import-block throw> {}", e.toString());
+                        if (e.getMessage() != null
+                                && e.getMessage().contains("No space left on device")) {
+                            log.error("Shutdown due to lack of disk space.");
+                            System.exit(0);
+                        }
+                        continue;
+                    }
+                }
+
+                imported += batch;
             }
 
-            imported += batch;
-
-            if (batchFromDisk.size() == batch) {
+            if (importedQueues.containsAll(levelFromDisk.keySet())) {
                 // all blocks were imported
                 // TODO delete level from storage
             } else {
-                // TODO delete imported from storage
+                // only some queues were imported
+                // TODO delete imported queues from storage
             }
         }
 

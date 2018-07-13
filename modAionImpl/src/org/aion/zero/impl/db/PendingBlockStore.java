@@ -176,20 +176,21 @@ public class PendingBlockStore implements Flushable, Closeable {
                 }
             };
 
-    public List<AionBlock> loadBlockRange(long level) {
+    public Map<ByteArrayWrapper, List<AionBlock>> loadBlockRange(long level) {
         // get the queue for the given level
         List<byte[]> queueHashes = levelSource.get(ByteUtil.longToBytes(level));
 
         if (queueHashes == null) {
-            return Collections.EMPTY_LIST;
+            return Collections.EMPTY_MAP;
         }
 
         // get all the blocks in the given queues
-        List<AionBlock> list, blocks = new ArrayList<>();
+        List<AionBlock> list;
+        Map<ByteArrayWrapper, List<AionBlock>> blocks = new HashMap<>();
         for (byte[] queue : queueHashes) {
             list = queueSource.get(queue);
             if (list != null) {
-                blocks.addAll(list);
+                blocks.put(ByteArrayWrapper.wrap(queue), list);
             }
         }
 

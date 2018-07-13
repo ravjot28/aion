@@ -24,9 +24,11 @@ package org.aion.mcf.core;
 
 import java.math.BigInteger;
 import java.util.List;
+import java.util.Map;
 import org.aion.base.type.Address;
 import org.aion.base.type.IBlock;
 import org.aion.base.type.ITransaction;
+import org.aion.base.util.ByteArrayWrapper;
 import org.aion.mcf.blockchain.IPowChain;
 import org.aion.mcf.types.AbstractBlockHeader;
 import org.aion.mcf.types.AbstractBlockSummary;
@@ -64,7 +66,7 @@ public interface IBlockchain<
 
     int storePendingBlockRange(List<BLK> blocks);
 
-    List<BLK> loadPendingBlocksAtLevel(long level);
+    Map<ByteArrayWrapper, List<BLK>> loadPendingBlocksAtLevel(long level);
 
     long nextBase(long current);
 
