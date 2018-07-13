@@ -25,8 +25,12 @@ package org.aion.zero.impl.sync;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Collection;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.aion.base.util.Hex;
+import org.aion.p2p.INode;
+import org.aion.p2p.IP2pMgr;
 import org.aion.zero.impl.AionBlockchainImpl;
 import org.aion.zero.impl.types.AionBlock;
 import org.slf4j.Logger;
@@ -53,9 +57,21 @@ final class TaskShowStatus implements Runnable {
 
     private final Logger p2pLOG;
 
-    TaskShowStatus(final AtomicBoolean _start, int _interval, final AionBlockchainImpl _chain,
-        final NetworkStatus _networkStatus, final SyncStatics _statics,
-        final boolean _printReport, final String _reportFolder, final Logger _log) {
+    private final IP2pMgr p2p;
+
+    private final Map<Integer, PeerState> peerStates;
+
+    TaskShowStatus(
+            final AtomicBoolean _start,
+            int _interval,
+            final AionBlockchainImpl _chain,
+            final NetworkStatus _networkStatus,
+            final SyncStatics _statics,
+            final boolean _printReport,
+            final String _reportFolder,
+            final IP2pMgr _p2p,
+            final Map<Integer, PeerState> _peerStates,
+            final Logger _log) {
         this.start = _start;
         this.interval = _interval;
         this.chain = _chain;
@@ -63,6 +79,8 @@ final class TaskShowStatus implements Runnable {
         this.statics = _statics;
         this.printReport = _printReport;
         this.reportFolder = _reportFolder;
+        this.p2p = _p2p;
+        this.peerStates = _peerStates;
         this.p2pLOG = _log;
     }
 
@@ -74,23 +92,35 @@ final class TaskShowStatus implements Runnable {
             String selfTd = selfBest.getCumulativeDifficulty().toString(10);
 
             String status =
-                "sync-status avg-import=" + String.format("%.2f", this.statics.getAvgBlocksPerSec())
-                    //
-                    + " b/s" //
-                    + " td=" + selfTd + "/" + networkStatus.getTargetTotalDiff().toString(10) //
-                    + " b-num=" + selfBest.getNumber() + "/" + this.networkStatus
-                    .getTargetBestBlockNumber() //
-                    + " b-hash=" + Hex.toHexString(this.chain.getBestBlockHash()) //
-                    + "/" + this.networkStatus.getTargetBestBlockHash() + "";
+                    "sync-status avg-import="
+                            + String.format("%.2f", this.statics.getAvgBlocksPerSec())
+                            //
+                            + " b/s" //
+                            + " td="
+                            + selfTd
+                            + "/"
+                            + networkStatus.getTargetTotalDiff().toString(10) //
+                            + " b-num="
+                            + selfBest.getNumber()
+                            + "/"
+                            + this.networkStatus.getTargetBestBlockNumber() //
+                            + " b-hash="
+                            + Hex.toHexString(this.chain.getBestBlockHash()) //
+                            + "/"
+                            + this.networkStatus.getTargetBestBlockHash()
+                            + "";
 
             p2pLOG.info(status);
+
+            p2pLOG.info(dumpPeerStateInfo(p2p.getActiveNodes().values()));
 
             // print to report file
             if (printReport) {
                 try {
                     Files.write(
-                        Paths.get(reportFolder, System.currentTimeMillis() + "-sync-report.out"),
-                        status.getBytes());
+                            Paths.get(
+                                    reportFolder, System.currentTimeMillis() + "-sync-report.out"),
+                            status.getBytes());
                 } catch (IOException e) {
                     if (p2pLOG.isDebugEnabled()) {
                         p2pLOG.debug("sync-ss report exception {}", e.toString());
@@ -110,5 +140,43 @@ final class TaskShowStatus implements Runnable {
         if (p2pLOG.isDebugEnabled()) {
             p2pLOG.debug("sync-ss shutdown");
         }
+    }
+
+    public String dumpPeerStateInfo(Collection<INode> filtered) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n");
+        sb.append(
+                String.format(
+                        "======================================================================== sync-status =========================================================================\n"));
+        sb.append(
+                String.format(
+                        "%9s %16s %17s %8s %16s %2s %2s %16s\n",
+                        "id", "# best block", "state", "mode", "base", "rp", "mx", "last request"));
+        sb.append(
+                "--------------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
+        for (INode n : filtered) {
+            try {
+                PeerState s = peerStates.get(n.getIdHash());
+                if (s != null) {
+                    sb.append(
+                            String.format(
+                                    "id:%6s %16d %17s %8s %16d %2d %2d %16d\n",
+                                    n.getIdShort(),
+                                    n.getBestBlockNumber(),
+                                    s.getState(),
+                                    s.getMode(),
+                                    s.getBase(),
+                                    s.getRepeated(),
+                                    s.getMaxRepeats(),
+                                    s.getLastHeaderRequest()));
+                } else {
+                    sb.append(
+                            String.format("id:%6s %16d\n", n.getIdShort(), n.getBestBlockNumber()));
+                }
+            } catch (Exception ex) {
+                p2pLOG.error("Exception while printing sync state", ex);
+            }
+        }
+        return sb.toString();
     }
 }
