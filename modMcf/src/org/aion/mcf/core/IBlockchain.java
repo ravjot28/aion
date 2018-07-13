@@ -70,6 +70,8 @@ public interface IBlockchain<
 
     long nextBase(long current);
 
+    void dropImported(long level, List<ByteArrayWrapper> queues, Map<ByteArrayWrapper, List<BLK>> blocks);
+
     void setBestBlock(BLK block);
 
     boolean hasParentOnTheChain(BLK block);

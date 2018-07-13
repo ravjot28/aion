@@ -486,6 +486,95 @@ public class PendingBlockStore implements Flushable, Closeable {
         return stored;
     }
 
+    public void dropPendingQueues(
+            long level,
+            List<ByteArrayWrapper> queues,
+            Map<ByteArrayWrapper, List<AionBlock>> blocks) {
+
+        lock.writeLock().lock();
+
+        try {
+            // delete imported queues & blocks
+            for (ByteArrayWrapper q : queues) {
+                // load the queue from disk
+                List<AionBlock> currentQ = queueSource.get(q.getData());
+
+                // delete imported blocks
+                for (AionBlock b : blocks.get(q)) {
+                    // delete index
+                    indexSource.putToBatch(b.getHash(), null);
+                    currentQ.remove(b);
+                }
+
+                // delete queue
+                queueSource.putToBatch(q.getData(), null);
+
+                // the queue has been updated since the import read
+                if (!currentQ.isEmpty()) {
+                    // get first block in remaining queue
+                    AionBlock first = currentQ.get(0);
+
+                    // update queue hash to first remaining element
+                    byte[] currentQueueHash = first.getHash();
+
+                    // put in queue database
+                    queueSource.putToBatch(currentQueueHash, currentQ);
+
+                    // update block index
+                    for (AionBlock b : currentQ) {
+                        indexSource.putToBatch(b.getHash(), currentQueueHash);
+                    }
+
+                    // add (to) level
+                    byte[] levelKey = ByteUtil.longToBytes(first.getNumber());
+                    List<byte[]> levelData = levelSource.get(levelKey);
+
+                    if (levelData == null) {
+                        levelData = new ArrayList<>();
+                    }
+
+                    levelData.add(currentQueueHash);
+                    levelSource.putToBatch(levelKey, levelData);
+                }
+            }
+
+            // update level
+            byte[] levelKey = ByteUtil.longToBytes(level);
+            List<byte[]> levelData = levelSource.get(levelKey);
+
+            if (levelData == null) {
+                LOG.error(
+                        "Corrupt data in PendingBlockStorage. Level (expected to exist) was not found.");
+                // level already missing so nothing to do here
+            } else {
+                List<byte[]> updatedLevelData = new ArrayList<>();
+
+                levelData.forEach(
+                        qHash -> {
+                            if (!queues.contains(ByteArrayWrapper.wrap(qHash))) {
+                                // this queue was not imported
+                                updatedLevelData.add(qHash);
+                            }
+                        });
+
+                if (updatedLevelData.isEmpty()) {
+                    // delete level
+                    levelSource.putToBatch(levelKey, null);
+                } else {
+                    // update level
+                    levelSource.putToBatch(levelKey, updatedLevelData);
+                }
+            }
+
+            // push changed to disk
+            indexSource.commitBatch();
+            queueSource.flushBatch();
+            levelSource.flushBatch();
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     @Override
     public void flush() {
         lock.writeLock().lock();

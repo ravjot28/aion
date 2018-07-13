@@ -1205,6 +1205,11 @@ public class AionBlockchainImpl implements IAionBlockchain {
         return repository.getPendingBlockStore().nextBase(current);
     }
 
+    @Override
+    public void dropImported(long level, List<ByteArrayWrapper> queues, Map<ByteArrayWrapper, List<AionBlock>> blocks) {
+        repository.getPendingBlockStore().dropPendingQueues(level, queues, blocks);
+    }
+
     public boolean hasParentOnTheChain(AionBlock block) {
         return getParent(block.getHeader()) != null;
     }

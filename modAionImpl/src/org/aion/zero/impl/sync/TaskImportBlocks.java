@@ -335,7 +335,8 @@ final class TaskImportBlocks implements Runnable {
 
         while (level <= last) {
             // get blocks stored for level
-            Map<ByteArrayWrapper, List<AionBlock>> levelFromDisk = chain.loadPendingBlocksAtLevel(level);
+            Map<ByteArrayWrapper, List<AionBlock>> levelFromDisk =
+                    chain.loadPendingBlocksAtLevel(level);
 
             if (levelFromDisk.isEmpty()) {
                 // move on to next level
@@ -366,9 +367,6 @@ final class TaskImportBlocks implements Runnable {
                                 .filter(b -> isNotImported(b))
                                 .collect(Collectors.toList());
 
-                // increment level
-                level++;
-
                 if (batchFromDisk.size() > 0) {
                     if (log.isDebugEnabled()) {
                         log.debug(
@@ -380,7 +378,7 @@ final class TaskImportBlocks implements Runnable {
                     if (log.isDebugEnabled()) {
                         log.debug("No blocks left after filtering out imported blocks.");
                     }
-                    // move on to next level
+                    // move on to next queue
                     // this queue will be deleted from storage
                     continue;
                 }
@@ -418,13 +416,11 @@ final class TaskImportBlocks implements Runnable {
                 imported += batch;
             }
 
-            if (importedQueues.containsAll(levelFromDisk.keySet())) {
-                // all blocks were imported
-                // TODO delete level from storage
-            } else {
-                // only some queues were imported
-                // TODO delete imported queues from storage
-            }
+            // remove imported data from storage
+            chain.dropImported(level, importedQueues, levelFromDisk);
+
+            // increment level
+            level++;
         }
 
         // switch to NORMAL if in FORWARD mode
