@@ -30,6 +30,7 @@
 package org.aion.zero.impl.sync;
 
 import static org.aion.p2p.P2pConstant.BACKWARD_SYNC_STEP;
+import static org.aion.p2p.P2pConstant.REQUEST_SIZE;
 
 import java.math.BigInteger;
 import java.util.Collection;
@@ -98,7 +99,7 @@ final class TaskGetHeaders implements Runnable {
 
         // decide the start block number
         long from = 0;
-        int size = 24;
+        int size = REQUEST_SIZE;
 
         // depends on the number of blocks going BACKWARD
         state.setMaxRepeats(BACKWARD_SYNC_STEP / size + 1);
