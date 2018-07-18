@@ -130,20 +130,29 @@ final class TaskImportBlocks implements Runnable {
 
             // in NORMAL mode and blocks filtered out
             if (state.getMode() == Mode.NORMAL && batch.isEmpty()) {
-                log.debug(
-                        "<import-mode-before: node = {}, sync mode = {}, base = {}>",
-                        bw.getDisplayId(),
-                        state.getMode(),
-                        state.getBase());
-                state.setMode(Mode.TORRENT);
-                state.setBase(chain.nextBase(chain.getBestBlock().getNumber()));
-                state.resetLastHeaderRequest();
-                log.debug(
-                        "<import-mode-after: node = {}, sync mode = {}, base = {}>",
-                        bw.getDisplayId(),
-                        state.getMode(),
-                        state.getBase());
-                continue;
+                long allState = peerStates.size();
+                long normalStates =
+                        peerStates
+                                .values()
+                                .stream()
+                                .filter(s -> s.getMode() == Mode.NORMAL)
+                                .count();
+                if (allState / 3 < normalStates) {
+                    log.debug(
+                            "<import-mode-before: node = {}, sync mode = {}, base = {}>",
+                            bw.getDisplayId(),
+                            state.getMode(),
+                            state.getBase());
+                    state.setMode(Mode.TORRENT);
+                    state.setBase(chain.nextBase(chain.getBestBlock().getNumber()));
+                    state.resetLastHeaderRequest();
+                    log.debug(
+                            "<import-mode-after: node = {}, sync mode = {}, base = {}>",
+                            bw.getDisplayId(),
+                            state.getMode(),
+                            state.getBase());
+                    continue;
+                }
             }
 
             ImportResult importResult = ImportResult.IMPORTED_NOT_BEST;
@@ -229,9 +238,7 @@ final class TaskImportBlocks implements Runnable {
                                 // update base
                                 state.setBase(b.getNumber());
                             } else {
-                                if (mode == Mode.TORRENT) {
-                                    state.setBase(chain.nextBase(state.getBase()));
-                                } else {
+                                if (mode != Mode.TORRENT) {
                                     // switch to backward mode
                                     state.setMode(Mode.BACKWARD);
                                     state.setBase(b.getNumber());
@@ -243,18 +250,46 @@ final class TaskImportBlocks implements Runnable {
 
                 // if any block results in NO_PARENT, all subsequent blocks will too
                 if (importResult == ImportResult.NO_PARENT) {
-                    log.debug("Stopped importing batch due to NO_PARENT result.");
-                    // store batch for later use
-                    log.debug(
-                            "Attempting to store batch of {} blocks starting from hash = {}, number = {}.",
-                            batch.size(),
-                            b.getShortHash(),
-                            b.getNumber());
                     int stored = chain.storePendingBlockRange(batch);
                     log.debug(
-                            "From the batch above, {} {} stored.",
+                            "Stopped importing batch due to NO_PARENT result.\n"
+                                    + "Stored {} out of {} blocks starting at hash = {}, number = {} from node = {}.",
                             stored,
-                            (stored == 1 ? "block was" : "blocks were"));
+                            batch.size(),
+                            b.getShortHash(),
+                            b.getNumber(),
+                            bw.getDisplayId());
+
+                    // check for repeated work
+                    if (state.getMode() == Mode.TORRENT) {
+                        if (stored < batch.size()) {
+                            long currentBest = chain.getBestBlock().getNumber();
+                            long nextBase = chain.nextBase(currentBest);
+
+                            if (nextBase == currentBest) {
+                                log.debug(
+                                    "Node {} switched from TORRENT to NORMAL with base = {}.",
+                                    bw.getDisplayId(),
+                                    nextBase);
+
+                                // switch back to normal if close to head
+                                state.setMode(Mode.NORMAL);
+                                state.setBase(currentBest);
+                            } else {
+                                // use generated next base
+                                state.setBase(nextBase);
+                            }
+                        } else {
+                            // continue queue if not repeated
+                            state.setBase(b.getNumber() + batch.size());
+                            log.debug(
+                                    "Node {} TORRENT continued with base = {}.",
+                                    bw.getDisplayId(),
+                                    state.getBase());
+                        }
+                        state.resetLastHeaderRequest();
+                    }
+
                     break;
                 }
             }
@@ -385,7 +420,7 @@ final class TaskImportBlocks implements Runnable {
 
                 for (AionBlock b : batchFromDisk) {
                     try {
-                        importResult = importBlock(b, "PENDING_BLOCKS_STORAGE", state);
+                        importResult = importBlock(b, "STORAGE", state);
 
                         if (importResult.isStored()) {
                             importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);

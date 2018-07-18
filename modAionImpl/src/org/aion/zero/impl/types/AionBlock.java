@@ -22,6 +22,7 @@
  */
 package org.aion.zero.impl.types;
 
+import com.google.common.base.Objects;
 import org.aion.base.type.Address;
 import org.aion.base.util.ByteUtil;
 import org.aion.base.util.Hex;
@@ -383,6 +384,23 @@ public class AionBlock extends AbstractBlock<A0BlockHeader, AionTransaction> imp
 
     public boolean isEqual(AionBlock block) {
         return Arrays.equals(this.getHash(), block.getHash());
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        AionBlock block = (AionBlock) o;
+        return Arrays.equals(rlpEncoded, block.rlpEncoded);
+    }
+
+    @Override
+    public int hashCode() {
+        return Arrays.hashCode(rlpEncoded);
     }
 
     public byte[] getEncoded() {

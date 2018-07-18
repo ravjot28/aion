@@ -126,10 +126,12 @@ final class TaskGetHeaders implements Runnable {
                 {
                     // step back by 24 to 128 blocks
                     int backwardStep = size * (random.nextInt(BACKWARD_SYNC_STEP / size) + 1);
-                    from = Math.max(1, state.getBase() - backwardStep);
+                    from = Math.max(1, state.getBase() -
+                        (random.nextBoolean() ? backwardStep : BACKWARD_SYNC_STEP));
                     break;
                 }
             case TORRENT:
+                size = 2 * REQUEST_SIZE;
                 // same as FORWARD
             case FORWARD:
                 {

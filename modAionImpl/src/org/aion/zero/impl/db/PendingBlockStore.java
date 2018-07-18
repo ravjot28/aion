@@ -26,14 +26,21 @@ import static org.aion.mcf.db.DatabaseUtils.connectAndOpen;
 
 import java.io.Closeable;
 import java.io.File;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Properties;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.stream.Collectors;
 import org.aion.base.db.Flushable;
 import org.aion.base.db.IByteArrayKeyValueDatabase;
 import org.aion.base.util.ByteArrayWrapper;
 import org.aion.base.util.ByteUtil;
+import org.aion.base.util.Hex;
 import org.aion.db.impl.DBVendor;
 import org.aion.db.impl.DatabaseFactory;
 import org.aion.db.impl.DatabaseFactory.Props;
@@ -42,6 +49,7 @@ import org.aion.log.LogEnum;
 import org.aion.mcf.db.exception.InvalidFilePathException;
 import org.aion.mcf.ds.ObjectDataSource;
 import org.aion.mcf.ds.Serializer;
+import org.aion.p2p.P2pConstant;
 import org.aion.rlp.RLP;
 import org.aion.rlp.RLPElement;
 import org.aion.rlp.RLPList;
@@ -51,6 +59,7 @@ import org.slf4j.Logger;
 public class PendingBlockStore implements Flushable, Closeable {
 
     private static final Logger LOG = AionLoggerFactory.getLogger(LogEnum.DB.name());
+    private static final Logger LOG_SYNC = AionLoggerFactory.getLogger(LogEnum.SYNC.name());
 
     protected ReadWriteLock lock = new ReentrantReadWriteLock();
 
@@ -69,6 +78,15 @@ public class PendingBlockStore implements Flushable, Closeable {
 
     // tracking the status
     private Map<ByteArrayWrapper, QueueInfo> status;
+    private long maxRequest = 0L, minStatus = Long.MAX_VALUE, maxStatus = 0L;
+
+    /**
+     * A block request in TORRENT mode must go forward at least 2 times the default REQUEST_SIZE.
+     */
+    private static final int STEPS_FORWARD = 6;
+
+    private static final int STEP_SIZE = P2pConstant.REQUEST_SIZE;
+    private static final int FORWARD_SKIP = STEPS_FORWARD * STEP_SIZE;
 
     public PendingBlockStore(Properties props) throws InvalidFilePathException {
 
@@ -198,48 +216,46 @@ public class PendingBlockStore implements Flushable, Closeable {
     }
 
     public long nextBase(long current) {
-
         lock.writeLock().lock();
 
         try {
-            // try request based on known queues
-            List<QueueInfo> known =
-                    status.values()
-                            .stream()
-                            .filter(b -> !b.isStatus()) // not coming from status
-                            .filter(b -> !b.isRequested()) // no requests made yet
-                            .filter(b -> b.getLast() > current) // last element > base
-                            .collect(Collectors.toList());
-
-            if (known.size() > 0) {
-                QueueInfo info = known.get(new Random().nextInt(known.size()));
-                // TODO: check if put is necessary
-                info.setRequested(true);
-                return info.getLast();
-            } else {
-                // try request based on status
-                known =
-                        status.values()
-                                .stream()
-                                .filter(b -> b.isStatus()) // from status
-                                .filter(b -> b.getFirst() > current) // first element > current
-                                .collect(Collectors.toList());
-
-                if (known.size() > 0) {
-                    long min = Long.MAX_VALUE;
-                    for (QueueInfo i : known) {
-                        if (min < i.getFirst()) {
-                            min = i.getFirst();
-                        }
-                    }
-                    min = min - current;
-
-                    // go at 2/3 distance to status
-                    return current + (2 * min / 3);
-                } else {
-                    return current;
-                }
+            if (LOG_SYNC.isDebugEnabled()) {
+                LOG_SYNC.debug(statusToString());
             }
+
+            long base;
+
+            if (current + STEP_SIZE >= maxStatus) {
+                // signal to switch back to NORMAL mode
+                base = current;
+            } else {
+
+                base = maxRequest + FORWARD_SKIP;
+
+                if (base <= current) {
+                    base = current + FORWARD_SKIP;
+                }
+
+                // TODO: special logic for status imports
+            }
+
+            if (LOG_SYNC.isDebugEnabled()) {
+                LOG_SYNC.debug(
+                        "min status = {}, max status = {}, max requested = {}, current = {}, returned base = {}",
+                        minStatus,
+                        maxStatus,
+                        maxRequest,
+                        current,
+                        base);
+            }
+
+            // keep track of base
+            if (base > maxRequest) {
+                maxRequest = base;
+            }
+
+            // return new base
+            return base;
         } finally {
             lock.writeLock().unlock();
         }
@@ -312,7 +328,7 @@ public class PendingBlockStore implements Flushable, Closeable {
                 currentQueue.add(block);
                 queueSource.put(currentQueueHash, currentQueue);
 
-                // update status
+                // update status tracking
                 ByteArrayWrapper hash = ByteArrayWrapper.wrap(currentQueueHash);
                 QueueInfo info = status.get(hash);
                 if (info == null) {
@@ -326,10 +342,15 @@ public class PendingBlockStore implements Flushable, Closeable {
                 } else {
                     info.setLast(block.getNumber());
                 }
-                // these blocks are added by get status
-                // the code should not attempt expanding them
-                info.setStatus(true);
                 status.put(hash, info);
+
+                if (minStatus > block.getNumber()) {
+                    minStatus = block.getNumber();
+                }
+
+                if (maxStatus < block.getNumber()) {
+                    maxStatus = block.getNumber();
+                }
 
                 // the block was added
                 return true;
@@ -352,7 +373,9 @@ public class PendingBlockStore implements Flushable, Closeable {
      *   <li>if new queue, add it to the <b>level</b> database
      * </ol>
      */
-    public int addBlockRange(List<AionBlock> blockRange) {
+    public int addBlockRange(List<AionBlock> blocks) {
+        List<AionBlock> blockRange = new ArrayList<>(blocks);
+
         // nothing to do when 0 blocks given
         if (blockRange == null || blockRange.size() == 0) {
             return 0;
@@ -457,6 +480,7 @@ public class PendingBlockStore implements Flushable, Closeable {
 
             // append block to queue
             currentQueue.add(current);
+            stored++;
 
             // update parent
             parent = current;
@@ -464,23 +488,6 @@ public class PendingBlockStore implements Flushable, Closeable {
 
         // done with queue
         queueSource.putToBatch(currentQueueHash, currentQueue);
-
-        // update status
-        ByteArrayWrapper hash = ByteArrayWrapper.wrap(currentQueueHash);
-        QueueInfo info = status.get(hash);
-        if (info == null) {
-            if (Arrays.equals(currentQueueHash, first.getHash())) {
-                info = new QueueInfo(currentQueueHash, first.getNumber(), parent.getNumber());
-            } else {
-                info = new QueueInfo(currentQueueHash, parent.getNumber());
-            }
-        } else {
-            info.setLast(parent.getNumber());
-        }
-        // just received batch for this queue
-        // so requested status set to false
-        info.setRequested(false);
-        status.put(hash, info);
 
         // the number of blocks added
         return stored;
@@ -614,6 +621,15 @@ public class PendingBlockStore implements Flushable, Closeable {
         }
     }
 
+    private String statusToString() {
+        StringBuilder sb = new StringBuilder("Current status queues:\n");
+        for (QueueInfo i : status.values()) {
+            sb.append(i.toString());
+            sb.append('\n');
+        }
+        return sb.toString();
+    }
+
     public static class QueueInfo {
 
         private static final long UNKNOWN = -1;
@@ -650,10 +666,6 @@ public class PendingBlockStore implements Flushable, Closeable {
         private long first;
         // the number of the last block in the queue
         private long last;
-        // has there been a request for expanding this
-        private boolean requested = false;
-        // block stored from status update
-        private boolean status = false;
 
         public byte[] getHash() {
             return hash;
@@ -671,27 +683,22 @@ public class PendingBlockStore implements Flushable, Closeable {
             this.last = last;
         }
 
-        public boolean isRequested() {
-            return requested;
-        }
-
-        public void setRequested(boolean requested) {
-            this.requested = requested;
-        }
-
-        public boolean isStatus() {
-            return status;
-        }
-
-        public void setStatus(boolean status) {
-            this.status = status;
-        }
-
         public byte[] getEncoded() {
             byte[] hashElement = RLP.encodeElement(hash);
             byte[] firstElement = RLP.encodeElement(ByteUtil.longToBytes(first));
             byte[] lastElement = RLP.encodeElement(ByteUtil.longToBytes(last));
             return RLP.encodeList(hashElement, firstElement, lastElement);
+        }
+
+        @Override
+        public String toString() {
+            return "[ short hash: "
+                    + Hex.toHexString(hash).substring(0, 6)
+                    + " first: "
+                    + first
+                    + " last: "
+                    + last
+                    + " ]";
         }
     }
 }
