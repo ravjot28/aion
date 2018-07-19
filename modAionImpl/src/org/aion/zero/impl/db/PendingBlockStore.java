@@ -412,42 +412,21 @@ public class PendingBlockStore implements Flushable, Closeable {
             }
         }
 
-        // find parent queue hash
-        Optional<byte[]> existingQueueHash = indexSource.get(first.getParentHash());
-        byte[] currentQueueHash = null;
-        List<AionBlock> currentQueue = null;
+        // the first block is not stored
+        // start new queue with hash = first node hash
+        byte[] currentQueueHash = first.getHash();
+        List<AionBlock> currentQueue = new ArrayList<>();
 
-        // get existing queue if present
-        if (existingQueueHash.isPresent()) {
-            // using parent queue hash
-            currentQueueHash = existingQueueHash.get();
+        // add (to) level
+        byte[] levelKey = ByteUtil.longToBytes(first.getNumber());
+        List<byte[]> levelData = levelSource.get(levelKey);
 
-            // append block to queue
-            currentQueue = queueSource.get(currentQueueHash);
-        } // do not add else here!
-
-        // when no queue exists OR problem with existing queue
-        if (currentQueue == null || currentQueue.size() == 0) {
-            // start new queue
-
-            // queue hash = the first node hash
-            currentQueueHash = first.getHash();
-            currentQueue = new ArrayList<>();
-
-            // add (to) level
-            byte[] levelKey = ByteUtil.longToBytes(first.getNumber());
-            List<byte[]> levelData = levelSource.get(levelKey);
-
-            if (levelData == null) {
-                levelData = new ArrayList<>();
-            }
-
-            levelData.add(currentQueueHash);
-            levelSource.putToBatch(levelKey, levelData);
+        if (levelData == null) {
+            levelData = new ArrayList<>();
         }
 
-        // NOTE: at this point the currentQueueHash was initialized
-        // either with a previous hash or the first block hash
+        levelData.add(currentQueueHash);
+        levelSource.putToBatch(levelKey, levelData);
 
         // index block with queue hash
         indexSource.putToBatch(first.getHash(), currentQueueHash);
