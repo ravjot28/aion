@@ -137,7 +137,9 @@ final class TaskImportBlocks implements Runnable {
                                 .stream()
                                 .filter(s -> s.getMode() == Mode.NORMAL)
                                 .count();
-                if (allState / 3 < normalStates) {
+                // targeting around 1/3 NORMAL sync nodes
+                // with a minimum of 2 NORMAL nodes
+                if (allState / 3 + 1 < normalStates) {
                     log.debug(
                             "<import-mode-before: node = {}, sync mode = {}, base = {}>",
                             bw.getDisplayId(),
@@ -185,6 +187,22 @@ final class TaskImportBlocks implements Runnable {
                     }
                     break;
                 }
+            }
+
+            // check for late TORRENT or NORMAL nodes
+            if ((state.getMode() == Mode.TORRENT || state.getMode() == Mode.NORMAL)
+                    && !batch.isEmpty()
+                    && batch.get(0).getNumber() < chain.getBestBlock().getNumber()) {
+
+                state.setMode(Mode.TORRENT);
+                state.setBase(chain.nextBase(chain.getBestBlock().getNumber()));
+                state.resetLastHeaderRequest();
+
+                batch.clear();
+                if (log.isDebugEnabled()) {
+                    log.debug("TORRENT skip for node {}.", bw.getDisplayId());
+                }
+                break;
             }
 
             // remembering imported range
@@ -268,9 +286,9 @@ final class TaskImportBlocks implements Runnable {
 
                             if (nextBase == currentBest) {
                                 log.debug(
-                                    "Node {} switched from TORRENT to NORMAL with base = {}.",
-                                    bw.getDisplayId(),
-                                    nextBase);
+                                        "Node {} switched from TORRENT to NORMAL with base = {}.",
+                                        bw.getDisplayId(),
+                                        nextBase);
 
                                 // switch back to normal if close to head
                                 state.setMode(Mode.NORMAL);
@@ -300,8 +318,6 @@ final class TaskImportBlocks implements Runnable {
                 state.incRepeated();
             }
 
-            state.resetLastHeaderRequest(); // so we can continue immediately
-
             // check for stored blocks
             if (first < last) {
                 int imported = importFromStorage(state, first, last);
@@ -310,6 +326,8 @@ final class TaskImportBlocks implements Runnable {
                     state.setBase(state.getMode() == Mode.TORRENT ? chain.nextBase(best) : best);
                 }
             }
+
+            state.resetLastHeaderRequest(); // so we can continue immediately
 
             this.statis.update(this.chain.getBestBlock().getNumber());
         }

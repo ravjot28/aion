@@ -50,5 +50,7 @@ public class P2pConstant {
 
     BACKWARD_SYNC_STEP = 144,
 
-    REQUEST_SIZE = 24;
+    REQUEST_SIZE = 24,
+
+    TORRENT_REQUEST_SIZE = 60;
 }

@@ -85,7 +85,7 @@ public class PendingBlockStore implements Flushable, Closeable {
      */
     private static final int STEPS_FORWARD = 6;
 
-    private static final int STEP_SIZE = P2pConstant.REQUEST_SIZE;
+    private static final int STEP_SIZE = P2pConstant.TORRENT_REQUEST_SIZE;
     private static final int FORWARD_SKIP = STEPS_FORWARD * STEP_SIZE;
 
     public PendingBlockStore(Properties props) throws InvalidFilePathException {
@@ -225,7 +225,9 @@ public class PendingBlockStore implements Flushable, Closeable {
 
             long base;
 
-            if (current + STEP_SIZE >= maxStatus) {
+            if (maxStatus == 0) {
+                base = current + FORWARD_SKIP;
+            } else if (current + STEP_SIZE >= maxStatus) {
                 // signal to switch back to NORMAL mode
                 base = current;
             } else {
