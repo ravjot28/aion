@@ -107,7 +107,10 @@ final class TaskGetHeaders implements Runnable {
 
         switch (state.getMode()) {
             case TORRENT:
-                if (state.getBase() > selfNumber + TORRENT_REQUEST_SIZE) {
+                // request forward blocks
+                if (state.getBase() > selfNumber + TORRENT_REQUEST_SIZE &&
+                    // ensure the request can be satisfied
+                    state.getBase() + TORRENT_REQUEST_SIZE < node.getBestBlockNumber()) {
                     size = TORRENT_REQUEST_SIZE;
                     from = state.getBase();
                     break;
