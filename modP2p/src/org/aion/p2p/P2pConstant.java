@@ -48,9 +48,13 @@ public class P2pConstant {
     // write queue timeout
     WRITE_MSG_TIMEOUT = 5000,
 
-    BACKWARD_SYNC_STEP = 144,
-
     REQUEST_SIZE = 24,
 
-    TORRENT_REQUEST_SIZE = 60;
+    TORRENT_REQUEST_SIZE = 60,
+
+    TORRENT_FORWARD_STEPS = 6,
+
+    // NOTE: the 3 values below are interdependent
+    // do not change one without considering the impact to the others
+    BACKWARD_SYNC_STEP = REQUEST_SIZE * TORRENT_FORWARD_STEPS - 1;
 }

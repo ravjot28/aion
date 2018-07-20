@@ -31,6 +31,7 @@ package org.aion.zero.impl.sync;
 
 import static org.aion.p2p.P2pConstant.BACKWARD_SYNC_STEP;
 import static org.aion.p2p.P2pConstant.REQUEST_SIZE;
+import static org.aion.p2p.P2pConstant.TORRENT_FORWARD_STEPS;
 import static org.aion.p2p.P2pConstant.TORRENT_REQUEST_SIZE;
 
 import java.math.BigInteger;
@@ -103,20 +104,23 @@ final class TaskGetHeaders implements Runnable {
         int size = REQUEST_SIZE;
 
         // depends on the number of blocks going BACKWARD
-        state.setMaxRepeats(BACKWARD_SYNC_STEP / size + 1);
+        state.setMaxRepeats(TORRENT_FORWARD_STEPS);
 
         switch (state.getMode()) {
             case TORRENT:
                 // request forward blocks
                 if (state.getBase() > selfNumber + TORRENT_REQUEST_SIZE &&
                     // ensure the request can be satisfied
-                    state.getBase() + TORRENT_REQUEST_SIZE < node.getBestBlockNumber()) {
+                    state.getBase() + TORRENT_REQUEST_SIZE < node.getBestBlockNumber() &&
+                    // there have not been TORRENT_FORWARD_STEPS sequential requests
+                    state.getRepeated() < state.getMaxRepeats()) {
                     size = TORRENT_REQUEST_SIZE;
                     from = state.getBase();
                     break;
                 } else {
                     // else go to normal
                     state.setMode(Mode.NORMAL);
+                    state.resetRepeated();
                 }
              case NORMAL:
                 {

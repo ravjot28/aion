@@ -298,6 +298,7 @@ final class TaskImportBlocks implements Runnable {
                                 state.setBase(nextBase);
                             }
                         } else {
+                            state.incRepeated();
                             // continue queue if not repeated
                             state.setBase(b.getNumber() + batch.size());
                             log.debug(

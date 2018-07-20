@@ -83,7 +83,7 @@ public class PendingBlockStore implements Flushable, Closeable {
     /**
      * A block request in TORRENT mode must go forward at least 2 times the default REQUEST_SIZE.
      */
-    private static final int STEPS_FORWARD = 6;
+    private static final int STEPS_FORWARD = P2pConstant.TORRENT_FORWARD_STEPS;
 
     private static final int STEP_SIZE = P2pConstant.TORRENT_REQUEST_SIZE;
     private static final int FORWARD_SKIP = STEPS_FORWARD * STEP_SIZE;
