@@ -25,10 +25,13 @@ package org.aion.zero.impl.sync;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.aion.base.util.Hex;
+import org.aion.net.Peer;
 import org.aion.p2p.INode;
 import org.aion.p2p.IP2pMgr;
 import org.aion.zero.impl.AionBlockchainImpl;
@@ -112,7 +115,10 @@ final class TaskShowStatus implements Runnable {
 
             p2pLOG.info(status);
 
-            p2pLOG.info(dumpPeerStateInfo(p2p.getActiveNodes().values()));
+            String s = dumpPeerStateInfo(p2p.getActiveNodes().values());
+            if (!s.isEmpty()) {
+                p2pLOG.info(s);
+            }
 
             // print to report file
             if (printReport) {
@@ -143,40 +149,66 @@ final class TaskShowStatus implements Runnable {
     }
 
     public String dumpPeerStateInfo(Collection<INode> filtered) {
-        StringBuilder sb = new StringBuilder();
-        sb.append("\n");
-        sb.append(
-                String.format(
-                        "======================================================================== sync-status =========================================================================\n"));
-        sb.append(
-                String.format(
-                        "%9s %16s %17s %8s %16s %2s %2s %16s\n",
-                        "id", "# best block", "state", "mode", "base", "rp", "mx", "last request"));
-        sb.append(
-                "--------------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
+        List<NodeState> sorted = new ArrayList<>();
         for (INode n : filtered) {
-            try {
-                PeerState s = peerStates.get(n.getIdHash());
-                if (s != null) {
-                    sb.append(
-                            String.format(
-                                    "id:%6s %16d %17s %8s %16d %2d %2d %16d\n",
-                                    n.getIdShort(),
-                                    n.getBestBlockNumber(),
-                                    s.getState(),
-                                    s.getMode(),
-                                    s.getBase(),
-                                    s.getRepeated(),
-                                    s.getMaxRepeats(),
-                                    s.getLastHeaderRequest()));
-                } else {
-                    sb.append(
-                            String.format("id:%6s %16d\n", n.getIdShort(), n.getBestBlockNumber()));
-                }
-            } catch (Exception ex) {
-                p2pLOG.error("Exception while printing sync state", ex);
+            PeerState s = peerStates.get(n.getIdHash());
+            if (s != null) {
+                sorted.add(new NodeState(n, s));
             }
         }
-        return sb.toString();
+
+        if (sorted.size() > 0) {
+            sorted.sort((n1, n2) -> ((Long) n2.getS().getBase()).compareTo(n1.getS().getBase()));
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("\n");
+            sb.append(
+                String.format(
+                    "======================================================================== sync-status =========================================================================\n"));
+            sb.append(
+                String.format(
+                    "%9s %16s %17s %8s %16s %2s %2s %16s\n",
+                    "id", "# best block", "state", "mode", "base", "rp", "mx", "last request"));
+            sb.append(
+                "--------------------------------------------------------------------------------------------------------------------------------------------------------------------\n");
+
+            for (NodeState ns : sorted) {
+                INode n = ns.getN();
+                PeerState s = ns.getS();
+
+                sb.append(
+                    String.format(
+                        "id:%6s %16d %17s %8s %16d %2d %2d %16d\n",
+                        n.getIdShort(),
+                        n.getBestBlockNumber(),
+                        s.getState(),
+                        s.getMode(),
+                        s.getBase(),
+                        s.getRepeated(),
+                        s.getMaxRepeats(),
+                        s.getLastHeaderRequest()));
+            }
+            return sb.toString();
+        }
+return "";
+    }
+
+    private class NodeState {
+
+        INode n;
+        PeerState s;
+
+        NodeState(INode _n, PeerState _s){
+            this.n = _n;
+            this.s = _s;
+        }
+
+        public INode getN() {
+            return n;
+        }
+
+        public PeerState getS() {
+            return s;
+        }
     }
 }

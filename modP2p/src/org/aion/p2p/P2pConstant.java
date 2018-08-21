@@ -50,6 +50,7 @@ public class P2pConstant {
 
     REQUEST_SIZE = 24,
 
+    /** @implNote must be strictly larger than {@link #REQUEST_SIZE} */
     TORRENT_REQUEST_SIZE = 60,
 
     TORRENT_FORWARD_STEPS = 6,

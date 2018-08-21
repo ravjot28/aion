@@ -97,7 +97,7 @@ final class TaskGetHeaders implements Runnable {
         INode node = nodesFiltered.get(random.nextInt(nodesFiltered.size()));
 
         // fetch the peer state
-        PeerState state = peerStates.get(node.getIdHash());
+        PeerState state = new PeerState(peerStates.get(node.getIdHash()));
 
         // decide the start block number
         long from = 0;
@@ -118,9 +118,8 @@ final class TaskGetHeaders implements Runnable {
                     from = state.getBase();
                     break;
                 } else {
-                    // else go to normal
+                    // else behave as normal
                     state.setMode(Mode.NORMAL);
-                    state.resetRepeated();
                 }
              case NORMAL:
                 {
@@ -164,6 +163,7 @@ final class TaskGetHeaders implements Runnable {
                     size,
                     node.getIdShort());
         }
+        peerStates.put(node.getIdHash(), state);
         ReqBlocksHeaders rbh = new ReqBlocksHeaders(from, size);
         this.p2p.send(node.getIdHash(), node.getIdShort(), rbh);
 
