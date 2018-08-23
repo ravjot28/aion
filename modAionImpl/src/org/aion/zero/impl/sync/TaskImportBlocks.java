@@ -37,7 +37,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import org.aion.base.util.ByteArrayWrapper;
 import org.aion.mcf.core.ImportResult;
-import org.aion.p2p.P2pConstant;
 import org.aion.zero.impl.AionBlockchainImpl;
 import org.aion.zero.impl.sync.PeerState.Mode;
 import org.aion.zero.impl.types.AionBlock;
@@ -136,10 +135,11 @@ final class TaskImportBlocks implements Runnable {
             long trtStates = getStateCount(Mode.TORRENT);
             // in NORMAL mode and blocks filtered out
             if (state.getMode() == Mode.NORMAL
-                    && (batch.isEmpty() || nrmStates > peerStates.size() / 2)) {
+                    && (batch.isEmpty() || nrmStates > peerStates.size() / 2)
+                    && state.canTorrent()) {
                 // targeting around same number of TORRENT and NORMAL sync nodes
                 // with a minimum of 2 NORMAL nodes
-                if (trtStates < nrmStates - 1) {
+                if (trtStates < nrmStates - 1 && nrmStates > 4) {
                     log.debug(
                             "<import-mode-before: node = {}, sync mode = {}, base = {}>",
                             bw.getDisplayId(),
@@ -198,8 +198,11 @@ final class TaskImportBlocks implements Runnable {
             if ((state.getMode() == Mode.TORRENT || state.getMode() == Mode.NORMAL)
                     && !batch.isEmpty()
                     && batch.get(batch.size() - 1).getNumber() < getBestBlockNumber()) {
-
-                state.update(Mode.TORRENT, chain.nextBase(getBestBlockNumber()), true);
+                if (state.canTorrent()) {
+                    state.update(Mode.TORRENT, chain.nextBase(getBestBlockNumber()), true);
+                } else {
+                    state.update(Mode.NORMAL, getBestBlockNumber(), true);
+                }
                 state.resetLastHeaderRequest();
 
                 batch.clear();
@@ -259,11 +262,17 @@ final class TaskImportBlocks implements Runnable {
                                 // update base
                                 state.setBase(b.getNumber());
                             } else {
-                                if (mode != Mode.TORRENT
-                                        && bw.getBlocks().size() <= P2pConstant.REQUEST_SIZE
-                                        && trtStates == 0) {
+                                if (mode != Mode.TORRENT && state.canBackward()) {
                                     // switch to backward mode
                                     state.update(Mode.BACKWARD, b.getNumber(), false);
+                                } else {
+                                    if (!state.canBackward()
+                                            && state.getRepeated() == state.getMaxRepeats()) {
+                                        state.setCanBackward(true);
+                                    } else {
+                                        state.incRepeated();
+                                    }
+                                    state.update(Mode.NORMAL, getBestBlockNumber(), true);
                                 }
                             }
                             break;
@@ -285,31 +294,35 @@ final class TaskImportBlocks implements Runnable {
 
                     // check for repeated work
                     if (state.getMode() == Mode.TORRENT) {
-                        if (stored < batch.size()) {
-                            long currentBest = getBestBlockNumber();
-                            long nextBase = chain.nextBase(currentBest);
-
-                            if (nextBase == currentBest) {
-                                log.debug(
-                                        "Node {} switched from TORRENT to NORMAL with base = {}.",
-                                        bw.getDisplayId(),
-                                        nextBase);
-
-                                // switch back to normal if close to head
-                                state.setMode(Mode.NORMAL);
-                                state.setBase(currentBest);
-                            } else {
-                                // use generated next base
-                                state.setBase(nextBase);
-                            }
+                        if (!state.canTorrent()) {
+                            state.update(Mode.NORMAL, getBestBlockNumber(), true);
                         } else {
-                            state.incRepeated();
-                            // continue queue if not repeated
-                            state.setBase(b.getNumber() + batch.size());
-                            log.debug(
-                                    "Node {} TORRENT continued with base = {}.",
-                                    bw.getDisplayId(),
-                                    state.getBase());
+                            if (stored < batch.size()) {
+                                long currentBest = getBestBlockNumber();
+                                long nextBase = chain.nextBase(currentBest);
+
+                                if (nextBase == currentBest) {
+                                    log.debug(
+                                            "Node {} switched from TORRENT to NORMAL with base = {}.",
+                                            bw.getDisplayId(),
+                                            nextBase);
+
+                                    // switch back to normal if close to head
+                                    state.setMode(Mode.NORMAL);
+                                    state.setBase(currentBest);
+                                } else {
+                                    // use generated next base
+                                    state.setBase(nextBase);
+                                }
+                            } else {
+                                state.incRepeated();
+                                // continue queue if not repeated
+                                state.setBase(b.getNumber() + batch.size());
+                                log.debug(
+                                        "Node {} TORRENT continued with base = {}.",
+                                        bw.getDisplayId(),
+                                        state.getBase());
+                            }
                         }
                         state.resetLastHeaderRequest();
                     }

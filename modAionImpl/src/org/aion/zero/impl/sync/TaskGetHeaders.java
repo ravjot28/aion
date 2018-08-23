@@ -118,7 +118,10 @@ final class TaskGetHeaders implements Runnable {
                     from = state.getBase();
                     break;
                 } else {
-                    // else behave as normal
+                    // behave as normal (with conditions)
+                    state.noTorrent();
+                    state.setCanBackward(false);
+                    state.resetRepeated();
                     state.setMode(Mode.NORMAL);
                 }
              case NORMAL:

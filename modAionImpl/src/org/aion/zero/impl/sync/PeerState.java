@@ -40,6 +40,8 @@ public class PeerState {
     // compute how many times to go forward without importing a new block
     private int repeated;
     private int maxRepeats;
+    private boolean canTorrent = true;
+    private boolean canBackward = true;
 
     // The syncing status
     private State state;
@@ -64,6 +66,7 @@ public class PeerState {
         this.base = _state.base;
         this.repeated = _state.repeated;
         this.maxRepeats = _state.maxRepeats;
+        this.canTorrent = _state.canTorrent;
         this.state = _state.state;
         this.lastHeaderRequest = _state.lastHeaderRequest;
     }
@@ -73,6 +76,7 @@ public class PeerState {
         this.base = _state.base;
         this.repeated = _state.repeated;
         this.maxRepeats = _state.maxRepeats;
+        this.canTorrent = _state.canTorrent;
         this.state = _state.state;
         this.lastHeaderRequest = _state.lastHeaderRequest;
     }
@@ -83,6 +87,22 @@ public class PeerState {
         if (resetRepeated) {
             this.resetRepeated();
         }
+    }
+
+    public void noTorrent() {
+        this.canTorrent = false;
+    }
+
+    public boolean canTorrent() {
+        return this.canTorrent;
+    }
+
+    public boolean canBackward() {
+        return canBackward;
+    }
+
+    public void setCanBackward(boolean canBackward) {
+        this.canBackward = canBackward;
     }
 
     public Mode getMode() {
