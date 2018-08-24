@@ -1,5 +1,6 @@
 package org.aion.zero.impl.sync;
 
+import static org.aion.p2p.P2pConstant.TORRENT_FORWARD_STEPS;
 
 public class PeerState {
 
@@ -39,12 +40,11 @@ public class PeerState {
     // used in FORWARD mode to prevent endlessly importing EXISTing blocks
     // compute how many times to go forward without importing a new block
     private int repeated;
-    private int maxRepeats;
-    private boolean canTorrent = true;
-    private boolean canBackward = true;
+    private boolean backwardAble = true;
 
     // The syncing status
     private State state;
+    private long lastBestBlock = 0;
     private long lastHeaderRequest;
 
     /**
@@ -65,8 +65,6 @@ public class PeerState {
         this.mode = _state.mode;
         this.base = _state.base;
         this.repeated = _state.repeated;
-        this.maxRepeats = _state.maxRepeats;
-        this.canTorrent = _state.canTorrent;
         this.state = _state.state;
         this.lastHeaderRequest = _state.lastHeaderRequest;
     }
@@ -75,8 +73,6 @@ public class PeerState {
         this.mode = _state.mode;
         this.base = _state.base;
         this.repeated = _state.repeated;
-        this.maxRepeats = _state.maxRepeats;
-        this.canTorrent = _state.canTorrent;
         this.state = _state.state;
         this.lastHeaderRequest = _state.lastHeaderRequest;
     }
@@ -89,20 +85,20 @@ public class PeerState {
         }
     }
 
-    public void noTorrent() {
-        this.canTorrent = false;
+    public long getLastBestBlock() {
+        return lastBestBlock;
     }
 
-    public boolean canTorrent() {
-        return this.canTorrent;
+    public void setLastBestBlock(long lastBestBlock) {
+        this.lastBestBlock = lastBestBlock;
     }
 
-    public boolean canBackward() {
-        return canBackward;
+    public boolean isBackwardAble() {
+        return backwardAble;
     }
 
-    public void setCanBackward(boolean canBackward) {
-        this.canBackward = canBackward;
+    public void setBackwardAble(boolean backwardAble) {
+        this.backwardAble = backwardAble;
     }
 
     public Mode getMode() {
@@ -163,10 +159,6 @@ public class PeerState {
      *     EXIST.
      */
     public int getMaxRepeats() {
-        return maxRepeats;
-    }
-
-    public void setMaxRepeats(int maxRepeats) {
-        this.maxRepeats = maxRepeats;
+        return TORRENT_FORWARD_STEPS;
     }
 }

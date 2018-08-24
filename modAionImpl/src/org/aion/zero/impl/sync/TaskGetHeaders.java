@@ -97,34 +97,30 @@ final class TaskGetHeaders implements Runnable {
         INode node = nodesFiltered.get(random.nextInt(nodesFiltered.size()));
 
         // fetch the peer state
-        PeerState state = new PeerState(peerStates.get(node.getIdHash()));
+        PeerState state = peerStates.get(node.getIdHash());
 
         // decide the start block number
         long from = 0;
         int size = REQUEST_SIZE;
 
-        // depends on the number of blocks going BACKWARD
-        state.setMaxRepeats(TORRENT_FORWARD_STEPS);
+        state.setLastBestBlock(node.getBestBlockNumber());
 
         switch (state.getMode()) {
             case TORRENT:
                 // request forward blocks
-                if (state.getBase() > selfNumber + TORRENT_REQUEST_SIZE &&
-                    // ensure the request can be satisfied
-                    state.getBase() + TORRENT_REQUEST_SIZE < node.getBestBlockNumber() &&
-                    // there have not been TORRENT_FORWARD_STEPS sequential requests
-                    state.getRepeated() < state.getMaxRepeats()) {
+                if (state.getBase() > selfNumber + TORRENT_REQUEST_SIZE
+                        // there have not been TORRENT_FORWARD_STEPS sequential requests
+                        && state.getRepeated() < state.getMaxRepeats()) {
                     size = TORRENT_REQUEST_SIZE;
                     from = state.getBase();
                     break;
                 } else {
                     // behave as normal (with conditions)
-                    state.noTorrent();
-                    state.setCanBackward(false);
+                    state.setBackwardAble(false);
                     state.resetRepeated();
                     state.setMode(Mode.NORMAL);
                 }
-             case NORMAL:
+            case NORMAL:
                 {
                     // update base block
                     state.setBase(selfNumber);
@@ -166,7 +162,6 @@ final class TaskGetHeaders implements Runnable {
                     size,
                     node.getIdShort());
         }
-        peerStates.put(node.getIdHash(), state);
         ReqBlocksHeaders rbh = new ReqBlocksHeaders(from, size);
         this.p2p.send(node.getIdHash(), node.getIdShort(), rbh);
 
