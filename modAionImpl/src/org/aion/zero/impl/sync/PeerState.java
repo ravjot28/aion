@@ -62,18 +62,16 @@ public class PeerState {
 
     /** Copy constructor returns a peers state identical to the given parameter. */
     public PeerState(PeerState _state) {
-        this.mode = _state.mode;
-        this.base = _state.base;
-        this.repeated = _state.repeated;
-        this.state = _state.state;
-        this.lastHeaderRequest = _state.lastHeaderRequest;
+        copy(_state);
     }
 
     public void copy(PeerState _state) {
         this.mode = _state.mode;
         this.base = _state.base;
         this.repeated = _state.repeated;
+        this.backwardAble = _state.backwardAble;
         this.state = _state.state;
+        this.lastBestBlock = _state.lastBestBlock;
         this.lastHeaderRequest = _state.lastHeaderRequest;
     }
 

@@ -66,6 +66,9 @@ final class TaskImportBlocks implements Runnable {
 
     private final Logger log;
 
+    private List<Long> baseList;
+    private PeerState localState;
+
     TaskImportBlocks(
             final AionBlockchainImpl _chain,
             final AtomicBoolean _start,
@@ -82,6 +85,7 @@ final class TaskImportBlocks implements Runnable {
         this.peerStates = _peerStates;
         this.log = _log;
         this.baseList = new ArrayList<>();
+        this.localState = new PeerState(Mode.NORMAL, 0L);
     }
 
     private boolean isNotImported(AionBlock b) {
@@ -96,27 +100,25 @@ final class TaskImportBlocks implements Runnable {
         return peerStates.values().stream().filter(s -> s.getMode() == mode).count();
     }
 
-    private List<Long> baseList;
-
+    /** Returns either a recycled base or generates a new one. */
     private long getNextBase() {
         long best = getBestBlockNumber();
-        //        if (baseList.size() > P2pConstant.TORRENT_FORWARD_STEPS) {
-        //            long base = baseList.get(0);
-        //            while (base <= best) {
-        //                baseList.remove(0);
-        //                base = baseList.get(0);
-        //            }
-        //            if (base > best + P2pConstant.TORRENT_REQUEST_SIZE) {
-        //                return base;
-        //            } else {
-        //                baseList.remove(0);
-        //            }
-        //        }
-        // no base values to reuse
-        best = chain.nextBase(best);
-        //        baseList.add(best);
 
-        return best;
+        // remove bases that are no longer relevant
+        while (!baseList.isEmpty() && baseList.get(0) <= best) {
+            baseList.remove(0);
+        }
+
+        if (baseList.isEmpty()) {
+            return chain.nextBase(best);
+        } else {
+            return baseList.remove(0);
+        }
+    }
+
+    /** Add an unused base to the list. */
+    private void recycleNextBase(long base) {
+        baseList.add(base);
     }
 
     private boolean canTorrent(PeerState state, long nextBase) {
@@ -163,95 +165,84 @@ final class TaskImportBlocks implements Runnable {
                 // by setting time in the future
                 state.setLastHeaderRequest(System.currentTimeMillis() + 20000);
 
-                processBatch(state, batch, bw.getDisplayId());
+                if (batch.isEmpty()) {
+                    if (log.isDebugEnabled()) {
+                        log.debug(
+                                "Empty batch received from node = {} in mode = {} with base = {}.",
+                                bw.getDisplayId(),
+                                state.getMode(),
+                                state.getBase());
+                    }
+                } else {
+                    // process batch with a copy of the state
+                    processBatch(state, batch, bw.getDisplayId());
+                    // make all the changes in one operation
+                    state.copy(localState);
+                }
 
                 // so we can continue immediately
                 state.resetLastHeaderRequest();
 
-                this.statis.update(getBestBlockNumber());
+                statis.update(getBestBlockNumber());
             }
         }
         log.info(Thread.currentThread().getName() + " RIP.");
     }
 
-    // TODO
-    private void processBatch(PeerState state, List<AionBlock> batch, String displayId) {
+    /** @implNote This method is called only when state is not null and batch in not empty. */
+    private PeerState processBatch(PeerState givenState, List<AionBlock> batch, String displayId) {
+        // make a copy of the original state
+        localState.copy(givenState);
 
-        long nrmStates = getStateCount(Mode.NORMAL);
-        long trtStates = getStateCount(Mode.TORRENT);
-        long nextBase = getNextBase();
-        // in NORMAL mode and blocks filtered out
-        if (state.getMode() == Mode.NORMAL
-                && (batch.isEmpty() || (nrmStates > 4 && trtStates < nrmStates - 1))
-                && canTorrent(state, nextBase)) {
-            // targeting around same number of TORRENT and NORMAL sync nodes
-            // with a minimum of 2 NORMAL nodes
-            log.debug(
-                    "<import-mode-before: node = {}, sync mode = {}, base = {}>",
-                    displayId,
-                    state.getMode(),
-                    state.getBase());
-
-            state.update(Mode.TORRENT, nextBase, true);
-            state.resetLastHeaderRequest();
-
-            log.debug(
-                    "<import-mode-after: node = {}, sync mode = {}, base = {}>",
-                    displayId,
-                    state.getMode(),
-                    state.getBase());
-            return;
-        }
-
-        ImportResult importResult = ImportResult.IMPORTED_NOT_BEST;
+        ImportResult importResult = ImportResult.INVALID_BLOCK;
 
         // importing last block in batch to see if we can skip batch
-        if (state.getMode() == Mode.FORWARD && !batch.isEmpty()) {
+        if (givenState.getMode() == Mode.FORWARD) {
             AionBlock b = batch.get(batch.size() - 1);
 
             try {
-                importResult = importBlock(b, displayId, state);
+                importResult = importBlock(b, displayId, localState);
             } catch (Throwable e) {
                 log.error("<import-block throw> {}", e.toString());
                 if (e.getMessage() != null && e.getMessage().contains("No space left on device")) {
                     log.error("Shutdown due to lack of disk space.");
                     System.exit(0);
                 }
-                return;
+                return localState;
             }
 
             if (importResult.isStored()) {
                 importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
 
-                forwardModeUpdate(state, b.getNumber(), importResult, b.getNumber());
+                // TODO test and determine consequences
+                forwardModeUpdate(localState, b.getNumber(), importResult, b.getNumber());
 
                 // since last import worked skipping the batch
                 batch.clear();
                 if (log.isDebugEnabled()) {
                     log.debug("FORWARD skip for node {}.", displayId);
                 }
-                return;
+                return localState;
             }
         }
 
         // check for late TORRENT or NORMAL nodes
-        if ((state.getMode() == Mode.TORRENT || state.getMode() == Mode.NORMAL)
-                && !batch.isEmpty()
+        if ((givenState.getMode() == Mode.TORRENT || givenState.getMode() == Mode.NORMAL)
                 && batch.get(batch.size() - 1).getNumber() < getBestBlockNumber()) {
 
-            if (canTorrent(state, nextBase)) {
-                state.update(Mode.TORRENT, nextBase, true);
-                log.debug("NEXT BASE 2: {}", state.getBase());
+            long nextBase = getNextBase();
+            if (canTorrent(localState, nextBase)) {
+                localState.update(Mode.TORRENT, nextBase, true);
             } else {
-                state.update(Mode.NORMAL, getBestBlockNumber(), true);
+                localState.update(Mode.NORMAL, getBestBlockNumber(), true);
+                recycleNextBase(nextBase);
             }
-            state.resetLastHeaderRequest();
 
             batch.clear();
             if (log.isDebugEnabled()) {
                 log.debug("TORRENT skip for node {}.", displayId);
             }
-            return;
+            return localState;
         }
 
         // remembering imported range
@@ -259,7 +250,7 @@ final class TaskImportBlocks implements Runnable {
 
         for (AionBlock b : batch) {
             try {
-                importResult = importBlock(b, displayId, state);
+                importResult = importBlock(b, displayId, localState);
 
                 if (importResult.isStored()) {
                     importedBlockHashes.put(ByteArrayWrapper.wrap(b.getHash()), true);
@@ -274,13 +265,14 @@ final class TaskImportBlocks implements Runnable {
                     log.error("Shutdown due to lack of disk space.");
                     System.exit(0);
                 }
+                // TODO test and determine consequences
                 continue;
             }
 
             // decide whether to change mode based on the first
             if (b == batch.get(0)) {
                 first = b.getNumber();
-                Mode mode = state.getMode();
+                Mode mode = givenState.getMode();
 
                 switch (importResult) {
                     case IMPORTED_BEST:
@@ -292,27 +284,27 @@ final class TaskImportBlocks implements Runnable {
 
                         if (mode == Mode.BACKWARD) {
                             // we found the fork point
-                            state.update(Mode.FORWARD, lastBlock, true);
+                            localState.update(Mode.FORWARD, lastBlock, true);
                         } else if (mode == Mode.FORWARD) {
-                            forwardModeUpdate(state, lastBlock, importResult, b.getNumber());
+                            forwardModeUpdate(localState, lastBlock, importResult, b.getNumber());
                         }
                         break;
                     case NO_PARENT:
                         if (mode == Mode.BACKWARD) {
                             // update base
-                            state.setBase(b.getNumber());
+                            localState.setBase(b.getNumber());
                         } else {
-                            if (mode != Mode.TORRENT && state.isBackwardAble()) {
+                            if (mode != Mode.TORRENT && givenState.isBackwardAble()) {
                                 // switch to backward mode
-                                state.update(Mode.BACKWARD, b.getNumber(), false);
+                                localState.update(Mode.BACKWARD, b.getNumber(), false);
                             } else {
-                                if (!state.isBackwardAble()
-                                        && state.getRepeated() == state.getMaxRepeats()) {
-                                    state.setBackwardAble(true);
+                                if (!givenState.isBackwardAble()
+                                        && givenState.getRepeated() == givenState.getMaxRepeats()) {
+                                    localState.setBackwardAble(true);
                                 } else {
-                                    state.incRepeated();
+                                    localState.incRepeated();
                                 }
-                                state.update(Mode.NORMAL, getBestBlockNumber(), true);
+                                localState.update(Mode.NORMAL, getBestBlockNumber(), true);
                             }
                         }
                         break;
@@ -332,70 +324,97 @@ final class TaskImportBlocks implements Runnable {
                         displayId);
 
                 // check for repeated work
-                if (state.getMode() == Mode.TORRENT) {
-                    if (!canTorrent(state, nextBase)) {
-                        state.update(Mode.NORMAL, getBestBlockNumber(), true);
+                if (localState.getMode() == Mode.TORRENT) {
+
+                    long nextBase = getNextBase();
+                    if (!canTorrent(localState, nextBase)) {
+                        log.debug(
+                                "Node {} switched from TORRENT to NORMAL with base = {}.",
+                                displayId,
+                                nextBase);
+
+                        localState.update(Mode.NORMAL, getBestBlockNumber(), true);
+                        recycleNextBase(nextBase);
                     } else {
                         if (stored < batch.size()) {
-                            long currentBest = getBestBlockNumber();
-                            log.debug("NEXT BASE 3: {}", state.getBase());
-
-                            if (nextBase == currentBest) {
-                                log.debug(
-                                        "Node {} switched from TORRENT to NORMAL with base = {}.",
-                                        displayId,
-                                        nextBase);
-
-                                // switch back to normal if close to head
-                                state.setMode(Mode.NORMAL);
-                                state.setBase(currentBest);
-                            } else {
-                                // use generated next base
-                                state.setBase(nextBase);
-                            }
+                            // use generated next base
+                            localState.setBase(nextBase);
                         } else {
-                            state.incRepeated();
+                            localState.incRepeated();
                             // continue queue if not repeated
-                            state.setBase(b.getNumber() + batch.size());
+                            localState.setBase(b.getNumber() + batch.size());
                             log.debug(
                                     "Node {} TORRENT continued with base = {}.",
                                     displayId,
-                                    state.getBase());
+                                    localState.getBase());
+                            recycleNextBase(nextBase);
                         }
                     }
-                    state.resetLastHeaderRequest();
                 }
                 break;
             }
         }
 
-        if (state.getMode() == Mode.FORWARD && importResult == ImportResult.EXIST) {
+        if (localState.getMode() == Mode.FORWARD && importResult == ImportResult.EXIST) {
             // increment the repeat count every time
             // we finish a batch of imports with EXIST
-            state.incRepeated();
+            localState.incRepeated();
         }
 
-        if (state.getMode() == Mode.FORWARD && importResult == ImportResult.IMPORTED_BEST) {
+        if (localState.getMode() == Mode.FORWARD && importResult == ImportResult.IMPORTED_BEST) {
             // behaving like normal so switch back
-            state.setMode(Mode.NORMAL);
+            localState.setMode(Mode.NORMAL);
         }
 
         // check for stored blocks
         if (first < last) {
-            int imported = importFromStorage(state, first, last);
+            int imported = importFromStorage(localState, first, last);
             if (imported > 0) {
-                if (state.getMode() == Mode.TORRENT) {
-                    nextBase = getNextBase();
-                    if (canTorrent(state, nextBase)) {
-                        state.setBase(nextBase);
-                    } else {
-                        state.update(Mode.NORMAL, getBestBlockNumber(), true);
-                    }
+                // TODO: may have already updated torrent mode
+                if (localState.getMode() == Mode.TORRENT) {
+                    if (localState.getBase() == givenState.getBase() // was not already updated
+                            || localState.getBase()
+                                    <= getBestBlockNumber() + P2pConstant.REQUEST_SIZE) {
+                        long nextBase = getNextBase();
+                        if (canTorrent(localState, nextBase)) {
+                            localState.setBase(nextBase);
+                        } else {
+                            localState.update(Mode.NORMAL, getBestBlockNumber(), true);
+                            recycleNextBase(nextBase);
+                        }
+                    } // else already updated to a correct request
                 } else {
-                    state.setBase(getBestBlockNumber());
+                    localState.setBase(getBestBlockNumber());
                 }
             }
         }
+
+        long nrmStates = getStateCount(Mode.NORMAL);
+        long trtStates = getStateCount(Mode.TORRENT);
+        long nextBase = getNextBase();
+        // in NORMAL mode and blocks filtered out
+        if (localState.getMode() == Mode.NORMAL
+                && (batch.isEmpty() || (nrmStates > 4 && trtStates < nrmStates - 1))
+                && canTorrent(localState, nextBase)) {
+            // targeting around same number of TORRENT and NORMAL sync nodes
+            // with a minimum of 2 NORMAL nodes
+            log.debug(
+                    "<import-mode-before: node = {}, sync mode = {}, base = {}>",
+                    displayId,
+                    localState.getMode(),
+                    localState.getBase());
+
+            localState.update(Mode.TORRENT, nextBase, true);
+            localState.resetLastHeaderRequest();
+
+            log.debug(
+                    "<import-mode-after: node = {}, sync mode = {}, base = {}>",
+                    displayId,
+                    localState.getMode(),
+                    localState.getBase());
+            return localState;
+        }
+        return localState;
     }
 
     private ImportResult importBlock(AionBlock b, String displayId, PeerState state) {
