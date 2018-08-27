@@ -42,7 +42,7 @@
 #define be64toh(x) OSSwapBigToHostInt64(x)
 #define le64toh(x) OSSwapLittleToHostInt64(x)
 #else
-#include <machine/endian.h>
+#include <endian.h>
 #endif 
 
 #define HASH_LEN 32
