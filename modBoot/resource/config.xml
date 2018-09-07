@@ -46,7 +46,7 @@
 		<show-status>false</show-status>
 	</sync>
 	<consensus>
-		<mining>false</mining>
+		<mining>true</mining>
 		<miner-address>0000000000000000000000000000000000000000000000000000000000000000</miner-address>
 		<cpu-mine-threads>2</cpu-mine-threads>
 		<extra-data>AION</extra-data>
