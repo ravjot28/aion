@@ -1206,8 +1206,8 @@ public class AionBlockchainImpl implements IAionBlockchain {
     }
 
     @Override
-    public long nextBase(long current) {
-        return repository.getPendingBlockStore().nextBase(current);
+    public long nextBase(long current, long knownStatus) {
+        return repository.getPendingBlockStore().nextBase(current, knownStatus);
     }
 
     @Override
